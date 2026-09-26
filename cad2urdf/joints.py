@@ -78,8 +78,8 @@ def _canonical(direction: np.ndarray) -> np.ndarray:
 def cylindrical_faces(part: Part, unit_scale: float) -> list[CylFace]:
     faces = []
     for f in part.shape.faces():
-        if f.geom_type != GeomType.CYLINDER:
-            continue
+        if f.geom_type != GeomType.CYLINDER or f.radius is None:
+            continue  # radius None: a converted/approximated surface flagged as cylindrical
         axis = f.axis_of_rotation
         p0 = _v(axis.position) * unit_scale
         d = _canonical(_v(axis.direction))
@@ -112,6 +112,35 @@ def _coaxial(a: CylFace, b: CylFace, cos_tol: float, offset_tol: float) -> bool:
     return abs(np.dot(a.direction, b.direction)) >= cos_tol and np.linalg.norm(a.point - b.point) <= offset_tol
 
 
+class _coaxial_index:
+    """k-d tree over (direction, axis foot point, radius) so only near-coaxial faces are compared.
+
+    Brute force is O(F^2) in Python; a 1,000-part robot has ~20k cylindrical faces.
+    The tree radius is a superset of the exact tolerances, which are re-checked by the caller.
+    """
+
+    def __init__(self, faces, angle_tol_deg, offset_tol, radial_tol):
+        from scipy.spatial import cKDTree
+
+        self.faces = faces
+        w_dir = offset_tol / max(np.sin(np.radians(angle_tol_deg)), 1e-9)
+        w_rad = offset_tol / radial_tol
+        self.r = offset_tol * 2.0
+        self.id = {id(f): k for k, f in enumerate(faces)}
+        pts = np.array([np.r_[f.direction * w_dir, f.point, f.radius * w_rad] for f in faces]).reshape(-1, 7)
+        # the axis foot point is only defined up to the sign of the (canonical) direction: fine
+        self.tree = cKDTree(pts) if len(faces) else None
+        self.pts = pts
+
+    def query_pairs_all(self):
+        return set() if self.tree is None else self.tree.query_pairs(self.r)
+
+    def neighbours(self, f):
+        if self.tree is None:
+            return []
+        return self.tree.query_ball_point(self.pts[self.id[id(f)]], self.r)
+
+
 def infer_joints(
     parts: list[Part],
     unit_scale: float,
@@ -123,21 +152,22 @@ def infer_joints(
 ) -> list[JointCandidate]:
     faces = [cf for p in parts for cf in cylindrical_faces(p, unit_scale)]
     cos_tol = np.cos(np.radians(angle_tol_deg))
+    near = _coaxial_index(faces, angle_tol_deg, offset_tol, radial_tol)
     matches: dict[tuple, list] = {}
-    for i, a in enumerate(faces):
-        for b in faces[i + 1 :]:
-            if a.link == b.link or a.convex == b.convex:
-                continue  # need one shaft and one bore on different links
-            if not _coaxial(a, b, cos_tol, offset_tol):
-                continue
-            shaft, bore = (a, b) if a.convex else (b, a)
-            if not (0 <= bore.radius - shaft.radius <= radial_tol):
-                continue
-            lo, hi = max(a.t0, b.t0), min(a.t1, b.t1)
-            if hi - lo < min_engagement:
-                continue
-            key = (*sorted((a.link, b.link)), *np.round(a.direction, 3), *np.round(a.point, 4))
-            matches.setdefault(key, []).append((shaft, bore, lo, hi))
+    for i, j in sorted(near.query_pairs_all()):
+        a, b = faces[i], faces[j]
+        if a.link == b.link or a.convex == b.convex:
+            continue  # need one shaft and one bore on different links
+        if not _coaxial(a, b, cos_tol, offset_tol):
+            continue
+        shaft, bore = (a, b) if a.convex else (b, a)
+        if not (0 <= bore.radius - shaft.radius <= radial_tol):
+            continue
+        lo, hi = max(a.t0, b.t0), min(a.t1, b.t1)
+        if hi - lo < min_engagement:
+            continue
+        key = (*sorted((a.link, b.link)), *np.round(a.direction, 3), *np.round(a.point, 4))
+        matches.setdefault(key, []).append((shaft, bore, lo, hi))
 
     out = []
     for key, group in matches.items():
@@ -151,7 +181,7 @@ def infer_joints(
         span = _union_length([(s.t0, s.t1) for s in shafts])
         held = []
         for s in shafts:
-            for f in faces:
+            for f in (faces[k] for k in near.neighbours(s)):
                 if f.link == s.link and not f.convex and _coaxial(f, s, cos_tol, offset_tol) \
                         and 0 <= f.radius - s.radius <= radial_tol:
                     a, b = max(f.t0, s.t0), min(f.t1, s.t1)

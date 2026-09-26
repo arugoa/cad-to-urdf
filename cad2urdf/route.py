@@ -41,6 +41,10 @@ def _onshape_to_robot(url: str, out: Path) -> Path:
         if not os.environ.get(k):
             sys.exit(f"{k} is not set. Create an API key pair in Onshape (My account -> Developer -> API keys) "
                      "and export ONSHAPE_API=https://cad.onshape.com ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=...")
+    from urllib.parse import urlparse
+
+    host = urlparse(url).netloc  # enterprise domains (e.g. team.onshape.com) need their own API base
+    os.environ.setdefault("ONSHAPE_API", f"https://{host}")
     exe = shutil.which("onshape-to-robot", path=str(Path(sys.executable).parent)) or shutil.which("onshape-to-robot")
     if exe is None:
         sys.exit("onshape-to-robot is not installed: pip install onshape-to-robot")
