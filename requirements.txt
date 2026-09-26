@@ -1,16 +1,23 @@
-# core
-build123d>=0.13      # OpenCascade (OCP) B-rep: STEP I/O, mass properties, tessellation
-trimesh>=4.0         # meshes, hulls, primitive fits, containment
-coacd>=1.0.14        # approximate convex decomposition
+# --- core (conversion) ---
+build123d>=0.13          # OpenCascade (OCP) B-rep: STEP I/O, mass properties, tessellation
+trimesh>=4.0             # meshes, hulls, primitive fits, containment
+coacd>=1.0.14            # approximate convex decomposition
 numpy
 scipy
 pyyaml
-mujoco>=3.2          # collision sampling for the SRDF + MJCF validation
-# validation / figures (optional)
-yourdfpy
-pybullet
-sapien>=3.0          # ManiSkill 3 backend
-matplotlib
 rtree
 manifold3d
+mujoco>=3.2              # SRDF self-collision sampling, MJCF validation, field drop test
+
+# --- Onshape front end ---
+onshape-to-robot>=1.8    # reads Onshape mates through the REST API (needs API keys)
+
+# --- validation, viewer, figures ---
+yourdfpy
+pybullet
+sapien>=3.0              # ManiSkill backend
+mani_skill>=3.0          # GPU/CPU ManiSkill check of the generated agent
+lark                     # needed by mani_skill's URDF parsing
+viser                    # browser viewer (tests/view_urdf.py)
+matplotlib
 pytest
