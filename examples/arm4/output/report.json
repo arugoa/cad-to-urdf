@@ -1,0 +1,714 @@
+{
+  "robot": "arm4",
+  "joint_candidates": [
+    "base_link <-> turret: revolute    axis=[0.0, 0.0, 1.0] origin=[0.0, 0.0, 0.072] r=14.8mm engagement=20.0mm free_shaft=20.0mm  [turret_disc->base_housing]",
+    "turret <-> upper_arm: revolute    axis=[-0.0, 1.0, -0.0] origin=[0.0, 0.0, 0.15] r=6.0mm engagement=20.0mm free_shaft=24.0mm  [shoulder_pin->turret_clevis_left, shoulder_pin->turret_clevis_right]",
+    "forearm <-> upper_arm: revolute    axis=[-0.0, 1.0, -0.0] origin=[0.0, 0.0, 0.4] r=5.0mm engagement=40.0mm free_shaft=42.0mm  [elbow_pin->upper_arm_beam]",
+    "forearm <-> gripper_base: revolute    axis=[0.0, 0.0, 1.0] origin=[0.0, 0.0, 0.6225] r=8.0mm engagement=15.0mm free_shaft=15.0mm  [wrist_flange->forearm_spacer]",
+    "finger_left <-> gripper_base: cylindrical axis=[-0.0, 1.0, -0.0] origin=[0.0, 0.018, 0.677] r=4.0mm engagement=20.0mm free_shaft=74.0mm  [gripper_rail->finger_left]",
+    "finger_right <-> gripper_base: cylindrical axis=[-0.0, 1.0, -0.0] origin=[0.0, -0.018, 0.677] r=4.0mm engagement=20.0mm free_shaft=74.0mm  [gripper_rail->finger_right]"
+  ],
+  "links": {
+    "base_link": {
+      "parts": [
+        "base_plate",
+        "base_bolt_1",
+        "base_bolt_2",
+        "base_bolt_3",
+        "base_bolt_4",
+        "base_housing"
+      ],
+      "mass_kg": 2.31588,
+      "com_m": [
+        0.0,
+        -0.0,
+        0.03132
+      ],
+      "inertia_diag": [
+        0.00430245,
+        0.00430245,
+        0.00567686
+      ],
+      "inertia_issues": [],
+      "collision_mode": "primitives",
+      "collision": {
+        "geoms": 2,
+        "kinds": [
+          "box",
+          "cylinder"
+        ],
+        "iou": 0.975,
+        "coverage": 0.992,
+        "excess": 0.017,
+        "max_hull_vertices": 0,
+        "total_vertices": 74
+      }
+    },
+    "turret": {
+      "parts": [
+        "turret_disc",
+        "turret_clevis_left",
+        "turret_clevis_right",
+        "shoulder_motor"
+      ],
+      "mass_kg": 1.29147,
+      "com_m": [
+        0.0,
+        0.02482,
+        0.05512
+      ],
+      "inertia_diag": [
+        0.00267835,
+        0.00171247,
+        0.00190016
+      ],
+      "inertia_issues": [],
+      "collision_mode": "primitives",
+      "collision": {
+        "geoms": 4,
+        "kinds": [
+          "box",
+          "cylinder",
+          "mesh"
+        ],
+        "iou": 0.81,
+        "coverage": 0.997,
+        "excess": 0.188,
+        "max_hull_vertices": 64,
+        "total_vertices": 146
+      }
+    },
+    "upper_arm": {
+      "parts": [
+        "upper_arm_beam",
+        "shoulder_pin",
+        "elbow_motor"
+      ],
+      "mass_kg": 1.07731,
+      "com_m": [
+        0.0,
+        -0.01236,
+        0.15314
+      ],
+      "inertia_diag": [
+        0.01160842,
+        0.01117361,
+        0.00071089
+      ],
+      "inertia_issues": [],
+      "collision_mode": "decompose",
+      "collision": {
+        "geoms": 16,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.761,
+        "coverage": 0.999,
+        "excess": 0.238,
+        "max_hull_vertices": 64,
+        "total_vertices": 890
+      }
+    },
+    "forearm": {
+      "parts": [
+        "forearm_plate_left",
+        "forearm_plate_right",
+        "forearm_spacer",
+        "elbow_pin"
+      ],
+      "mass_kg": 0.35053,
+      "com_m": [
+        -0.0,
+        0.0,
+        0.12418
+      ],
+      "inertia_diag": [
+        0.00250967,
+        0.00238184,
+        0.00017692
+      ],
+      "inertia_issues": [],
+      "collision_mode": "primitives",
+      "collision": {
+        "geoms": 4,
+        "kinds": [
+          "box",
+          "cylinder"
+        ],
+        "iou": 0.968,
+        "coverage": 1.0,
+        "excess": 0.032,
+        "max_hull_vertices": 0,
+        "total_vertices": 90
+      }
+    },
+    "gripper_base": {
+      "parts": [
+        "wrist_flange",
+        "gripper_palm",
+        "gripper_rail",
+        "gripper_rail_post_left",
+        "gripper_rail_post_right"
+      ],
+      "mass_kg": 0.16813,
+      "com_m": [
+        0.0,
+        -0.0,
+        0.03114
+      ],
+      "inertia_diag": [
+        0.00013367,
+        5.865e-05,
+        9.61e-05
+      ],
+      "inertia_issues": [],
+      "collision_mode": "primitives",
+      "collision": {
+        "geoms": 5,
+        "kinds": [
+          "box",
+          "cylinder"
+        ],
+        "iou": 0.846,
+        "coverage": 0.999,
+        "excess": 0.153,
+        "max_hull_vertices": 0,
+        "total_vertices": 156
+      }
+    },
+    "finger_left": {
+      "parts": [
+        "finger_left"
+      ],
+      "mass_kg": 0.01833,
+      "com_m": [
+        -0.0,
+        -0.00341,
+        0.01899
+      ],
+      "inertia_diag": [
+        1.049e-05,
+        1.073e-05,
+        1.37e-06
+      ],
+      "inertia_issues": [],
+      "collision_mode": "decompose",
+      "collision": {
+        "geoms": 6,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.976,
+        "coverage": 1.0,
+        "excess": 0.024,
+        "max_hull_vertices": 14,
+        "total_vertices": 61
+      }
+    },
+    "finger_right": {
+      "parts": [
+        "finger_right"
+      ],
+      "mass_kg": 0.01833,
+      "com_m": [
+        -0.0,
+        0.00341,
+        0.01899
+      ],
+      "inertia_diag": [
+        1.049e-05,
+        1.073e-05,
+        1.37e-06
+      ],
+      "inertia_issues": [],
+      "collision_mode": "decompose",
+      "collision": {
+        "geoms": 6,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.975,
+        "coverage": 1.0,
+        "excess": 0.025,
+        "max_hull_vertices": 13,
+        "total_vertices": 64
+      }
+    }
+  },
+  "srdf_disabled": {
+    "base_link|finger_right": "Never",
+    "base_link|turret": "Adjacent",
+    "base_link|upper_arm": "Never",
+    "finger_left|finger_right": "Never",
+    "finger_left|forearm": "Never",
+    "finger_left|gripper_base": "Adjacent",
+    "finger_left|turret": "Never",
+    "finger_left|upper_arm": "Never",
+    "finger_right|forearm": "Never",
+    "finger_right|gripper_base": "Adjacent",
+    "finger_right|turret": "Never",
+    "finger_right|upper_arm": "Never",
+    "forearm|gripper_base": "Adjacent",
+    "forearm|turret": "Never",
+    "forearm|upper_arm": "Adjacent",
+    "gripper_base|turret": "Never",
+    "gripper_base|upper_arm": "Never",
+    "turret|upper_arm": "Adjacent"
+  },
+  "collision_sampling": {
+    "samples": 5000,
+    "pairs_seen_colliding": {
+      "forearm|gripper_base": 5000,
+      "finger_left|gripper_base": 5000,
+      "turret|upper_arm": 5000,
+      "forearm|upper_arm": 5000,
+      "base_link|turret": 5000,
+      "finger_right|gripper_base": 5000,
+      "base_link|forearm": 14,
+      "base_link|gripper_base": 18,
+      "base_link|finger_left": 1
+    }
+  },
+  "collision_study": {
+    "base_link": {
+      "box": {
+        "geoms": 1,
+        "kinds": [
+          "box"
+        ],
+        "iou": 0.405,
+        "coverage": 1.0,
+        "excess": 0.595,
+        "max_hull_vertices": 0,
+        "total_vertices": 8,
+        "seconds": 0.13
+      },
+      "primitives": {
+        "geoms": 2,
+        "kinds": [
+          "box",
+          "cylinder"
+        ],
+        "iou": 0.975,
+        "coverage": 0.992,
+        "excess": 0.017,
+        "max_hull_vertices": 0,
+        "total_vertices": 74,
+        "seconds": 0.1
+      },
+      "hull": {
+        "geoms": 1,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.578,
+        "coverage": 1.0,
+        "excess": 0.422,
+        "max_hull_vertices": 64,
+        "total_vertices": 64,
+        "seconds": 0.12
+      },
+      "decompose@0.05": {
+        "geoms": 8,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.847,
+        "coverage": 0.981,
+        "excess": 0.138,
+        "max_hull_vertices": 64,
+        "total_vertices": 509,
+        "seconds": 24.84
+      },
+      "decompose@0.02": {
+        "geoms": 32,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.899,
+        "coverage": 0.992,
+        "excess": 0.094,
+        "max_hull_vertices": 64,
+        "total_vertices": 1629,
+        "seconds": 53.05
+      }
+    },
+    "turret": {
+      "box": {
+        "geoms": 1,
+        "kinds": [
+          "box"
+        ],
+        "iou": 0.178,
+        "coverage": 1.0,
+        "excess": 0.822,
+        "max_hull_vertices": 0,
+        "total_vertices": 8,
+        "seconds": 0.11
+      },
+      "primitives": {
+        "geoms": 4,
+        "kinds": [
+          "box",
+          "cylinder",
+          "mesh"
+        ],
+        "iou": 0.81,
+        "coverage": 0.997,
+        "excess": 0.188,
+        "max_hull_vertices": 64,
+        "total_vertices": 146,
+        "seconds": 0.15
+      },
+      "hull": {
+        "geoms": 1,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.359,
+        "coverage": 0.999,
+        "excess": 0.641,
+        "max_hull_vertices": 64,
+        "total_vertices": 64,
+        "seconds": 0.13
+      },
+      "decompose@0.05": {
+        "geoms": 8,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.864,
+        "coverage": 0.985,
+        "excess": 0.124,
+        "max_hull_vertices": 64,
+        "total_vertices": 511,
+        "seconds": 34.32
+      },
+      "decompose@0.02": {
+        "geoms": 31,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.892,
+        "coverage": 0.982,
+        "excess": 0.093,
+        "max_hull_vertices": 64,
+        "total_vertices": 1470,
+        "seconds": 41.09
+      }
+    },
+    "upper_arm": {
+      "box": {
+        "geoms": 1,
+        "kinds": [
+          "box"
+        ],
+        "iou": 0.324,
+        "coverage": 1.0,
+        "excess": 0.676,
+        "max_hull_vertices": 0,
+        "total_vertices": 8,
+        "seconds": 0.13
+      },
+      "primitives": {
+        "geoms": 3,
+        "kinds": [
+          "box",
+          "cylinder"
+        ],
+        "iou": 0.617,
+        "coverage": 0.999,
+        "excess": 0.383,
+        "max_hull_vertices": 0,
+        "total_vertices": 140,
+        "seconds": 0.16
+      },
+      "hull": {
+        "geoms": 1,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.395,
+        "coverage": 0.999,
+        "excess": 0.605,
+        "max_hull_vertices": 64,
+        "total_vertices": 64,
+        "seconds": 0.16
+      },
+      "decompose@0.05": {
+        "geoms": 8,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.731,
+        "coverage": 0.999,
+        "excess": 0.268,
+        "max_hull_vertices": 64,
+        "total_vertices": 467,
+        "seconds": 8.14
+      },
+      "decompose@0.02": {
+        "geoms": 17,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.762,
+        "coverage": 0.999,
+        "excess": 0.238,
+        "max_hull_vertices": 64,
+        "total_vertices": 954,
+        "seconds": 9.85
+      }
+    },
+    "forearm": {
+      "box": {
+        "geoms": 1,
+        "kinds": [
+          "box"
+        ],
+        "iou": 0.303,
+        "coverage": 1.0,
+        "excess": 0.697,
+        "max_hull_vertices": 0,
+        "total_vertices": 8,
+        "seconds": 0.11
+      },
+      "primitives": {
+        "geoms": 4,
+        "kinds": [
+          "box",
+          "cylinder"
+        ],
+        "iou": 0.968,
+        "coverage": 1.0,
+        "excess": 0.032,
+        "max_hull_vertices": 0,
+        "total_vertices": 90,
+        "seconds": 0.13
+      },
+      "hull": {
+        "geoms": 1,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.307,
+        "coverage": 1.0,
+        "excess": 0.693,
+        "max_hull_vertices": 34,
+        "total_vertices": 34,
+        "seconds": 0.1
+      },
+      "decompose@0.05": {
+        "geoms": 8,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.588,
+        "coverage": 0.995,
+        "excess": 0.41,
+        "max_hull_vertices": 64,
+        "total_vertices": 364,
+        "seconds": 6.43
+      },
+      "decompose@0.02": {
+        "geoms": 19,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.688,
+        "coverage": 1.0,
+        "excess": 0.312,
+        "max_hull_vertices": 64,
+        "total_vertices": 786,
+        "seconds": 7.6
+      }
+    },
+    "gripper_base": {
+      "box": {
+        "geoms": 1,
+        "kinds": [
+          "box"
+        ],
+        "iou": 0.299,
+        "coverage": 1.0,
+        "excess": 0.701,
+        "max_hull_vertices": 0,
+        "total_vertices": 8,
+        "seconds": 0.12
+      },
+      "primitives": {
+        "geoms": 5,
+        "kinds": [
+          "box",
+          "cylinder"
+        ],
+        "iou": 0.846,
+        "coverage": 0.999,
+        "excess": 0.153,
+        "max_hull_vertices": 0,
+        "total_vertices": 156,
+        "seconds": 0.18
+      },
+      "hull": {
+        "geoms": 1,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.539,
+        "coverage": 1.0,
+        "excess": 0.461,
+        "max_hull_vertices": 64,
+        "total_vertices": 64,
+        "seconds": 0.15
+      },
+      "decompose@0.05": {
+        "geoms": 8,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.777,
+        "coverage": 0.992,
+        "excess": 0.218,
+        "max_hull_vertices": 64,
+        "total_vertices": 511,
+        "seconds": 21.62
+      },
+      "decompose@0.02": {
+        "geoms": 21,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.903,
+        "coverage": 0.993,
+        "excess": 0.091,
+        "max_hull_vertices": 64,
+        "total_vertices": 1245,
+        "seconds": 25.24
+      }
+    },
+    "finger_left": {
+      "box": {
+        "geoms": 1,
+        "kinds": [
+          "box"
+        ],
+        "iou": 0.395,
+        "coverage": 1.0,
+        "excess": 0.605,
+        "max_hull_vertices": 0,
+        "total_vertices": 8,
+        "seconds": 0.13
+      },
+      "primitives": {
+        "geoms": 1,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.563,
+        "coverage": 1.0,
+        "excess": 0.437,
+        "max_hull_vertices": 12,
+        "total_vertices": 12,
+        "seconds": 0.18
+      },
+      "hull": {
+        "geoms": 1,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.563,
+        "coverage": 1.0,
+        "excess": 0.437,
+        "max_hull_vertices": 12,
+        "total_vertices": 12,
+        "seconds": 0.14
+      },
+      "decompose@0.05": {
+        "geoms": 5,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.972,
+        "coverage": 1.0,
+        "excess": 0.028,
+        "max_hull_vertices": 14,
+        "total_vertices": 55,
+        "seconds": 1.69
+      },
+      "decompose@0.02": {
+        "geoms": 9,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.991,
+        "coverage": 1.0,
+        "excess": 0.009,
+        "max_hull_vertices": 14,
+        "total_vertices": 87,
+        "seconds": 2.41
+      }
+    },
+    "finger_right": {
+      "box": {
+        "geoms": 1,
+        "kinds": [
+          "box"
+        ],
+        "iou": 0.391,
+        "coverage": 1.0,
+        "excess": 0.609,
+        "max_hull_vertices": 0,
+        "total_vertices": 8,
+        "seconds": 0.12
+      },
+      "primitives": {
+        "geoms": 1,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.561,
+        "coverage": 1.0,
+        "excess": 0.439,
+        "max_hull_vertices": 12,
+        "total_vertices": 12,
+        "seconds": 0.13
+      },
+      "hull": {
+        "geoms": 1,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.561,
+        "coverage": 1.0,
+        "excess": 0.439,
+        "max_hull_vertices": 12,
+        "total_vertices": 12,
+        "seconds": 0.12
+      },
+      "decompose@0.05": {
+        "geoms": 6,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.978,
+        "coverage": 1.0,
+        "excess": 0.022,
+        "max_hull_vertices": 14,
+        "total_vertices": 64,
+        "seconds": 2.06
+      },
+      "decompose@0.02": {
+        "geoms": 10,
+        "kinds": [
+          "mesh"
+        ],
+        "iou": 0.992,
+        "coverage": 1.0,
+        "excess": 0.008,
+        "max_hull_vertices": 13,
+        "total_vertices": 102,
+        "seconds": 2.53
+      }
+    }
+  }
+}

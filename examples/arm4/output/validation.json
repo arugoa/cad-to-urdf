@@ -1,0 +1,132 @@
+{
+  "yourdfpy": {
+    "ok": true,
+    "links": 7,
+    "actuated_joints": [
+      "shoulder_yaw",
+      "shoulder_pitch",
+      "elbow",
+      "wrist_roll",
+      "finger_left"
+    ],
+    "gripper_base_z_at_home": 0.6225
+  },
+  "mujoco_urdf_import": {
+    "raw_urdf": "loaded",
+    "with_strippath_false": {
+      "ngeom": 43,
+      "nbody": 7,
+      "neq (mimic->equality?)": 1,
+      "nu (actuators)": 0,
+      "dof_damping": [
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        2.0,
+        2.0
+      ],
+      "dof_frictionloss": [
+        0.05,
+        0.05,
+        0.05,
+        0.05,
+        0.5,
+        0.5
+      ],
+      "dof_armature": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "with_discardvisual_false": {
+      "ngeom": 56
+    },
+    "moving_mass_match": true,
+    "root_link_fused_into_world": true,
+    "package_uri_urdf": "FAILED: Error: Error opening file 'package://arm4_description/meshes/collision/upper_arm_0.stl'"
+  },
+  "mujoco_mjcf": {
+    "nbody": 8,
+    "ngeom": 57,
+    "nu": 5,
+    "neq": 1,
+    "nkey": 2,
+    "penetrating_pairs_at_home": [],
+    "stable": true,
+    "ready_tracking_err_rad_max": 0.0132,
+    "gravity_sag_note": "position servos with finite kp settle with a small steady-state error under gravity",
+    "fingers_after_open": [
+      0.00799,
+      0.00798
+    ]
+  },
+  "pybullet": {
+    "default_flags": {
+      "max_rel_inertia_error": 0.604
+    },
+    "USE_INERTIA_FROM_FILE": {
+      "max_rel_inertia_error": 0.0
+    },
+    "joint_damping_friction_read": {
+      "shoulder_yaw": [
+        0.5,
+        0.05
+      ],
+      "shoulder_pitch": [
+        0.5,
+        0.05
+      ],
+      "elbow": [
+        0.5,
+        0.05
+      ],
+      "wrist_roll": [
+        0.5,
+        0.05
+      ],
+      "finger_left": [
+        2.0,
+        0.5
+      ],
+      "finger_right": [
+        2.0,
+        0.5
+      ]
+    },
+    "self_collision_pairs_at_home (parent pairs excluded by flag)": [],
+    "after_3s": {
+      "shoulder_yaw": 0.0,
+      "shoulder_pitch": 0.6,
+      "elbow": 1.2,
+      "wrist_roll": 0.0,
+      "finger_left": 0.008,
+      "finger_right": 0.0079
+    }
+  },
+  "sapien_maniskill": {
+    "active_joints": [
+      "shoulder_yaw",
+      "shoulder_pitch",
+      "elbow",
+      "wrist_roll",
+      "finger_left",
+      "finger_right"
+    ],
+    "srdf_pairs_applied (only reason=Default is honoured)": [],
+    "total_mass": 5.24,
+    "qpos_after_3s": {
+      "shoulder_yaw": -0.00039999998989515007,
+      "shoulder_pitch": 0.5990999937057495,
+      "elbow": 1.1999000310897827,
+      "wrist_roll": 0.0,
+      "finger_left": -0.0,
+      "finger_right": -0.0
+    },
+    "mimic_note": "finger_right is an independent active joint in SAPIEN; ManiSkill uses a mimic controller"
+  }
+}

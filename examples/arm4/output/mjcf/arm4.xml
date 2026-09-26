@@ -1,0 +1,169 @@
+<mujoco model="arm4">
+  <compiler angle="radian" meshdir="../meshes" autolimits="true" />
+  <option timestep="0.002" integrator="implicitfast" />
+  <default>
+    <default class="visual">
+      <geom contype="0" conaffinity="0" group="2" density="0" />
+    </default>
+    <default class="collision">
+      <geom group="3" friction="1 0.005 0.0001" condim="4" density="0" rgba="0.2 0.6 1 0.4" />
+    </default>
+  </default>
+  <asset>
+    <material name="aluminum" rgba="0.72 0.74 0.78 1" />
+    <material name="steel" rgba="0.30 0.31 0.34 1" />
+    <material name="pla" rgba="0.95 0.45 0.15 1" />
+    <mesh name="base_link_aluminum" file="visual/base_link_aluminum.stl" />
+    <mesh name="base_link_steel" file="visual/base_link_steel.stl" />
+    <mesh name="turret_aluminum" file="visual/turret_aluminum.stl" />
+    <mesh name="turret_steel" file="visual/turret_steel.stl" />
+    <mesh name="turret_col0" file="collision/turret_0.stl" />
+    <mesh name="upper_arm_aluminum" file="visual/upper_arm_aluminum.stl" />
+    <mesh name="upper_arm_steel" file="visual/upper_arm_steel.stl" />
+    <mesh name="upper_arm_col0" file="collision/upper_arm_0.stl" />
+    <mesh name="upper_arm_col1" file="collision/upper_arm_1.stl" />
+    <mesh name="upper_arm_col2" file="collision/upper_arm_2.stl" />
+    <mesh name="upper_arm_col3" file="collision/upper_arm_3.stl" />
+    <mesh name="upper_arm_col4" file="collision/upper_arm_4.stl" />
+    <mesh name="upper_arm_col5" file="collision/upper_arm_5.stl" />
+    <mesh name="upper_arm_col6" file="collision/upper_arm_6.stl" />
+    <mesh name="upper_arm_col7" file="collision/upper_arm_7.stl" />
+    <mesh name="upper_arm_col8" file="collision/upper_arm_8.stl" />
+    <mesh name="upper_arm_col9" file="collision/upper_arm_9.stl" />
+    <mesh name="upper_arm_col10" file="collision/upper_arm_10.stl" />
+    <mesh name="upper_arm_col11" file="collision/upper_arm_11.stl" />
+    <mesh name="upper_arm_col12" file="collision/upper_arm_12.stl" />
+    <mesh name="upper_arm_col13" file="collision/upper_arm_13.stl" />
+    <mesh name="upper_arm_col14" file="collision/upper_arm_14.stl" />
+    <mesh name="upper_arm_col15" file="collision/upper_arm_15.stl" />
+    <mesh name="forearm_aluminum" file="visual/forearm_aluminum.stl" />
+    <mesh name="forearm_steel" file="visual/forearm_steel.stl" />
+    <mesh name="gripper_base_aluminum" file="visual/gripper_base_aluminum.stl" />
+    <mesh name="gripper_base_pla" file="visual/gripper_base_pla.stl" />
+    <mesh name="gripper_base_steel" file="visual/gripper_base_steel.stl" />
+    <mesh name="finger_left_pla" file="visual/finger_left_pla.stl" />
+    <mesh name="finger_left_col0" file="collision/finger_left_0.stl" />
+    <mesh name="finger_left_col1" file="collision/finger_left_1.stl" />
+    <mesh name="finger_left_col2" file="collision/finger_left_2.stl" />
+    <mesh name="finger_left_col3" file="collision/finger_left_3.stl" />
+    <mesh name="finger_left_col4" file="collision/finger_left_4.stl" />
+    <mesh name="finger_left_col5" file="collision/finger_left_5.stl" />
+    <mesh name="finger_right_pla" file="visual/finger_right_pla.stl" />
+    <mesh name="finger_right_col0" file="collision/finger_right_0.stl" />
+    <mesh name="finger_right_col1" file="collision/finger_right_1.stl" />
+    <mesh name="finger_right_col2" file="collision/finger_right_2.stl" />
+    <mesh name="finger_right_col3" file="collision/finger_right_3.stl" />
+    <mesh name="finger_right_col4" file="collision/finger_right_4.stl" />
+    <mesh name="finger_right_col5" file="collision/finger_right_5.stl" />
+  </asset>
+  <worldbody>
+    <light pos="0 0 3" dir="0 0 -1" directional="true" />
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.9 0.9 0.9 1" />
+    <body name="base_link" pos="0 0 0">
+      <inertial pos="0 0 0.031319" mass="2.31588" fullinertia="0.00430245 0.00430245 0.00567686 0 0 0" />
+      <geom class="visual" type="mesh" mesh="base_link_aluminum" material="aluminum" />
+      <geom class="visual" type="mesh" mesh="base_link_steel" material="steel" />
+      <geom class="collision" name="base_link_col0" pos="0 0 0.006" quat="1 0 0 0" type="box" size="0.08 0.08 0.006" />
+      <geom class="collision" name="base_link_col1" pos="0 0 0.047" quat="1 0 0 0" type="cylinder" size="0.05 0.035" />
+      <body name="turret" pos="0 0 0.072">
+        <inertial pos="0 0.0248244 0.0551163" mass="1.29147" fullinertia="0.00267835 0.00171247 0.00190016 0 0 -0.000733649" />
+        <joint name="shoulder_yaw" type="hinge" axis="0 0 1" range="-2.97 2.97" damping="0.5" frictionloss="0.05" armature="0.01" actuatorfrcrange="-40 40" />
+        <geom class="visual" type="mesh" mesh="turret_aluminum" material="aluminum" />
+        <geom class="visual" type="mesh" mesh="turret_steel" material="steel" />
+        <geom class="collision" name="turret_col0" type="mesh" mesh="turret_col0" />
+        <geom class="collision" name="turret_col1" pos="0 0.027 0.065" quat="1 0 0 0" type="box" size="0.03 0.005 0.04" />
+        <geom class="collision" name="turret_col2" pos="0 -0.027 0.065" quat="1 0 0 0" type="box" size="0.03 0.005 0.04" />
+        <geom class="collision" name="turret_col3" pos="0 0.052 0.078" quat="0.5 0.5 0.5 -0.5" type="cylinder" size="0.025 0.02" />
+        <body name="upper_arm" pos="0 0 0.078">
+          <inertial pos="0 -0.0123615 0.153138" mass="1.07731" fullinertia="0.0116084 0.0111736 0.000710891 0 0 0.00128993" />
+          <joint name="shoulder_pitch" type="hinge" axis="0 1 0" range="-1.75 1.75" damping="0.5" frictionloss="0.05" armature="0.01" actuatorfrcrange="-40 40" />
+          <geom class="visual" type="mesh" mesh="upper_arm_aluminum" material="aluminum" />
+          <geom class="visual" type="mesh" mesh="upper_arm_steel" material="steel" />
+          <geom class="collision" name="upper_arm_col0" type="mesh" mesh="upper_arm_col0" />
+          <geom class="collision" name="upper_arm_col1" type="mesh" mesh="upper_arm_col1" />
+          <geom class="collision" name="upper_arm_col2" type="mesh" mesh="upper_arm_col2" />
+          <geom class="collision" name="upper_arm_col3" type="mesh" mesh="upper_arm_col3" />
+          <geom class="collision" name="upper_arm_col4" type="mesh" mesh="upper_arm_col4" />
+          <geom class="collision" name="upper_arm_col5" type="mesh" mesh="upper_arm_col5" />
+          <geom class="collision" name="upper_arm_col6" type="mesh" mesh="upper_arm_col6" />
+          <geom class="collision" name="upper_arm_col7" type="mesh" mesh="upper_arm_col7" />
+          <geom class="collision" name="upper_arm_col8" type="mesh" mesh="upper_arm_col8" />
+          <geom class="collision" name="upper_arm_col9" type="mesh" mesh="upper_arm_col9" />
+          <geom class="collision" name="upper_arm_col10" type="mesh" mesh="upper_arm_col10" />
+          <geom class="collision" name="upper_arm_col11" type="mesh" mesh="upper_arm_col11" />
+          <geom class="collision" name="upper_arm_col12" type="mesh" mesh="upper_arm_col12" />
+          <geom class="collision" name="upper_arm_col13" type="mesh" mesh="upper_arm_col13" />
+          <geom class="collision" name="upper_arm_col14" type="mesh" mesh="upper_arm_col14" />
+          <geom class="collision" name="upper_arm_col15" type="mesh" mesh="upper_arm_col15" />
+          <body name="forearm" pos="0 0 0.25">
+            <inertial pos="0 0 0.124181" mass="0.350529" fullinertia="0.00250967 0.00238184 0.000176919 0 0 0" />
+            <joint name="elbow" type="hinge" axis="0 1 0" range="-2.35 2.35" damping="0.5" frictionloss="0.05" armature="0.01" actuatorfrcrange="-20 20" />
+            <geom class="visual" type="mesh" mesh="forearm_aluminum" material="aluminum" />
+            <geom class="visual" type="mesh" mesh="forearm_steel" material="steel" />
+            <geom class="collision" name="forearm_col0" pos="0 0.024 0.1025" quat="1 0 0 0" type="box" size="0.015 0.003 0.1175" />
+            <geom class="collision" name="forearm_col1" pos="0 -0.024 0.1025" quat="1 0 0 0" type="box" size="0.015 0.003 0.1175" />
+            <geom class="collision" name="forearm_col2" pos="0 0 0.215" quat="1 0 0 0" type="box" size="0.015 0.021 0.015" />
+            <geom class="collision" name="forearm_col3" pos="0 0 0" quat="-0.5 0.5 0.5 0.5" type="cylinder" size="0.005 0.027" />
+            <body name="gripper_base" pos="0 0 0.2225">
+              <inertial pos="0 0 0.0311419" mass="0.168131" fullinertia="0.000133667 5.86549e-05 9.60966e-05 0 0 0" />
+              <joint name="wrist_roll" type="hinge" axis="0 0 1" range="-3.14 3.14" damping="0.5" frictionloss="0.05" armature="0.01" actuatorfrcrange="-5 5" />
+              <geom class="visual" type="mesh" mesh="gripper_base_aluminum" material="aluminum" />
+              <geom class="visual" type="mesh" mesh="gripper_base_pla" material="pla" />
+              <geom class="visual" type="mesh" mesh="gripper_base_steel" material="steel" />
+              <geom class="collision" name="gripper_base_col0" pos="0 0 0.0075" quat="0 0 1 0" type="cylinder" size="0.02 0.015" />
+              <geom class="collision" name="gripper_base_col1" pos="0 0 0.0325" quat="1 0 0 0" type="box" size="0.015 0.045 0.01" />
+              <geom class="collision" name="gripper_base_col2" pos="0 0 0.0545" quat="-0.5 0.5 0.5 0.5" type="cylinder" size="0.004 0.045" />
+              <geom class="collision" name="gripper_base_col3" pos="0 0.041 0.0545" quat="1 0 0 0" type="box" size="0.008 0.004 0.012" />
+              <geom class="collision" name="gripper_base_col4" pos="0 -0.041 0.0545" quat="1 0 0 0" type="box" size="0.008 0.004 0.012" />
+              <body name="finger_left" pos="0 0.018 0.0545">
+                <inertial pos="0 -0.00340914 0.0189938" mass="0.0183319" fullinertia="1.04928e-05 1.07345e-05 1.37101e-06 0 0 1.25031e-06" />
+                <joint name="finger_left" type="slide" axis="0 1 0" range="-0.006 0.008" damping="2" frictionloss="0.5" armature="0.001" actuatorfrcrange="-20 20" />
+                <geom class="visual" type="mesh" mesh="finger_left_pla" material="pla" />
+                <geom class="collision" name="finger_left_col0" type="mesh" mesh="finger_left_col0" />
+                <geom class="collision" name="finger_left_col1" type="mesh" mesh="finger_left_col1" />
+                <geom class="collision" name="finger_left_col2" type="mesh" mesh="finger_left_col2" />
+                <geom class="collision" name="finger_left_col3" type="mesh" mesh="finger_left_col3" />
+                <geom class="collision" name="finger_left_col4" type="mesh" mesh="finger_left_col4" />
+                <geom class="collision" name="finger_left_col5" type="mesh" mesh="finger_left_col5" />
+              </body>
+              <body name="finger_right" pos="0 -0.018 0.0545">
+                <inertial pos="0 0.00340914 0.0189938" mass="0.0183319" fullinertia="1.04928e-05 1.07345e-05 1.37101e-06 0 0 -1.25031e-06" />
+                <joint name="finger_right" type="slide" axis="0 -1 0" range="-0.006 0.008" damping="2" frictionloss="0.5" armature="0.001" actuatorfrcrange="-20 20" />
+                <geom class="visual" type="mesh" mesh="finger_right_pla" material="pla" />
+                <geom class="collision" name="finger_right_col0" type="mesh" mesh="finger_right_col0" />
+                <geom class="collision" name="finger_right_col1" type="mesh" mesh="finger_right_col1" />
+                <geom class="collision" name="finger_right_col2" type="mesh" mesh="finger_right_col2" />
+                <geom class="collision" name="finger_right_col3" type="mesh" mesh="finger_right_col3" />
+                <geom class="collision" name="finger_right_col4" type="mesh" mesh="finger_right_col4" />
+                <geom class="collision" name="finger_right_col5" type="mesh" mesh="finger_right_col5" />
+              </body>
+              <site name="tcp" pos="0 0 0.12" size="0.005" />
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <contact>
+    <exclude body1="base_link" body2="turret" />
+    <exclude body1="finger_left" body2="gripper_base" />
+    <exclude body1="finger_right" body2="gripper_base" />
+    <exclude body1="forearm" body2="gripper_base" />
+    <exclude body1="forearm" body2="upper_arm" />
+    <exclude body1="turret" body2="upper_arm" />
+  </contact>
+  <equality>
+    <joint joint1="finger_right" joint2="finger_left" polycoef="0 1 0 0 0" />
+  </equality>
+  <actuator>
+    <position name="shoulder_yaw" joint="shoulder_yaw" kp="200" kv="10" ctrlrange="-2.97 2.97" forcerange="-40 40" />
+    <position name="shoulder_pitch" joint="shoulder_pitch" kp="200" kv="10" ctrlrange="-1.75 1.75" forcerange="-40 40" />
+    <position name="elbow" joint="elbow" kp="200" kv="10" ctrlrange="-2.35 2.35" forcerange="-20 20" />
+    <position name="wrist_roll" joint="wrist_roll" kp="20" kv="1" ctrlrange="-3.14 3.14" forcerange="-5 5" />
+    <position name="finger_left" joint="finger_left" kp="500" kv="20" ctrlrange="-0.006 0.008" forcerange="-20 20" />
+  </actuator>
+  <keyframe>
+    <key name="home" qpos="0 0 0 0 0 0" ctrl="0 0 0 0 0" />
+    <key name="ready" qpos="0 0.6 1.2 0 0 0" ctrl="0 0.6 1.2 0 0" />
+  </keyframe>
+</mujoco>

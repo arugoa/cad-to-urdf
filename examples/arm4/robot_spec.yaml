@@ -1,0 +1,107 @@
+# Granularity spec for the arm4 sample.
+#
+# This is the human- (or LLM-) authored layer that sits on top of the CAD file.
+# It answers the questions a CAD export cannot answer on its own:
+#   * which parts move together (link grouping)
+#   * which interfaces are joints, of what type, with what limits
+#   * how detailed each link's collision geometry should be
+#   * what dynamics to write (materials, damping, armature, actuators)
+#   * what MoveIt/SRDF semantics to emit (groups, poses, end effector)
+#
+# Anything omitted is inferred: joint axes/origins come from coaxial
+# shaft/bore detection in the B-rep (see cad2urdf/joints.py), masses and
+# inertias from B-rep volume x material density.
+
+robot: arm4
+source: cad/arm4.step
+units: mm            # CAD length unit; outputs are SI (m, kg)
+
+materials:           # density in kg/m^3
+  aluminum: 2700
+  steel: 7850
+  pla: 1240
+
+# Part -> material. fnmatch patterns, first match wins.
+part_materials:
+  "base_bolt_*": steel
+  "*_pin": steel
+  "*_motor": steel
+  "gripper_rail": steel
+  "gripper_*": pla
+  "finger_*": pla
+  "*": aluminum
+
+# Link grouping: every part must land in exactly one link (patterns).
+links:
+  base_link:    ["base_*"]
+  turret:       ["turret_*", "shoulder_motor"]
+  upper_arm:    ["upper_arm_*", "shoulder_pin", "elbow_motor"]
+  forearm:      ["forearm_*", "elbow_pin"]
+  gripper_base: ["wrist_flange", "gripper_palm", "gripper_rail", "gripper_rail_post_*"]
+  finger_left:  ["finger_left"]
+  finger_right: ["finger_right"]
+
+# Joints. `axis`/`origin` may be "auto" -> taken from the matching geometric
+# joint candidate between parent and child. Limits are in rad or m.
+joints:
+  shoulder_yaw:   {type: revolute,  parent: base_link,    child: turret,       limits: [-2.97, 2.97], effort: 40, velocity: 3.0}
+  shoulder_pitch: {type: revolute,  parent: turret,       child: upper_arm,    limits: [-1.75, 1.75], effort: 40, velocity: 3.0}
+  elbow:          {type: revolute,  parent: upper_arm,    child: forearm,      limits: [-2.35, 2.35], effort: 20, velocity: 3.0}
+  wrist_roll:     {type: revolute,  parent: forearm,      child: gripper_base, limits: [-3.14, 3.14], effort: 5,  velocity: 6.0}
+  # The rail is a shaft-in-bore (cylindrical) interface: geometry alone can't
+  # tell "slides" from "spins". The spec disambiguates: prismatic along the rail.
+  finger_left:    {type: prismatic, parent: gripper_base, child: finger_left,  limits: [-0.006, 0.008], effort: 20, velocity: 0.1}
+  finger_right:   {type: prismatic, parent: gripper_base, child: finger_right, limits: [-0.006, 0.008], effort: 20, velocity: 0.1,
+                   axis_sign: -1, mimic: {joint: finger_left, multiplier: 1.0, offset: 0.0}}
+
+# Joint dynamics written into every target (see docs/RESEARCH.md §6).
+dynamics:
+  default:        {damping: 0.5, friction: 0.05, armature: 0.01}
+  finger_left:    {damping: 2.0, friction: 0.5,  armature: 0.001}
+  finger_right:   {damping: 2.0, friction: 0.5,  armature: 0.001}
+
+actuators:           # position servos (PD) — MJCF <actuator>, Isaac/ManiSkill cfg, ros2_control
+  default:        {kind: position, kp: 200.0, kv: 10.0}
+  wrist_roll:     {kind: position, kp: 20.0,  kv: 1.0}
+  finger_left:    {kind: position, kp: 500.0, kv: 20.0}
+  finger_right:   {kind: none}   # driven through the mimic/equality constraint
+
+contact:
+  friction: [1.0, 0.005, 0.0001]   # sliding, torsional, rolling (MuJoCo order)
+  restitution: 0.0
+
+# Collision granularity per link. Modes, from cheapest to most faithful:
+#   none        no collision geometry
+#   box         one oriented bounding box for the whole link
+#   primitives  per-part box/cylinder/sphere fits; parts smaller than
+#               `min_part_fraction` of the link volume are culled
+#   hull        one convex hull of the whole link
+#   decompose   CoACD approximate convex decomposition (threshold = concavity)
+#   mesh        raw triangle mesh (NOT recommended: most engines convexify it)
+collision:
+  default:      {mode: hull}
+  base_link:    {mode: primitives, min_part_fraction: 0.02}
+  turret:       {mode: primitives, min_part_fraction: 0.02}
+  upper_arm:    {mode: decompose, threshold: 0.02, max_hulls: 16}   # slotted beam: a box would fill the slot
+  forearm:      {mode: primitives, min_part_fraction: 0.02}   # plates+spacer+pin: boxes beat CoACD (IoU 0.97 vs 0.59)
+  gripper_base: {mode: primitives, min_part_fraction: 0.02}
+  finger_left:  {mode: decompose, threshold: 0.03, max_hulls: 6}    # L-shaped: one hull fills the notch (IoU 0.56)
+  finger_right: {mode: decompose, threshold: 0.03, max_hulls: 6}
+  max_hull_vertices: 64          # PhysX GPU limit per convex hull
+
+visual:
+  tessellation: {linear_mm: 0.2, angular_deg: 10}
+
+srdf:
+  virtual_joint: {name: world_joint, type: fixed, parent_frame: world, child_link: base_link}
+  groups:
+    arm:     {chain: [base_link, gripper_base]}
+    gripper: {joints: [finger_left, finger_right]}
+  group_states:
+    home:  {group: arm, joints: {shoulder_yaw: 0, shoulder_pitch: 0, elbow: 0, wrist_roll: 0}}
+    ready: {group: arm, joints: {shoulder_yaw: 0, shoulder_pitch: 0.6, elbow: 1.2, wrist_roll: 0}}
+    open:  {group: gripper, joints: {finger_left: 0.008}}
+    closed: {group: gripper, joints: {finger_left: -0.006}}
+  end_effector: {name: hand, parent_link: gripper_base, group: gripper, parent_group: arm}
+  passive_joints: [finger_right]
+  collision_samples: 5000
