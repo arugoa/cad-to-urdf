@@ -36,7 +36,7 @@ Pick three things: **CAD package → export format → simulator**.
 
 ```
  CAD + format ──► front end ──────────────► finish (cad2urdf) ──────────────► validate
- onshape/native    onshape-to-robot (mates)   links, inertia, collision,        MuJoCo, PyBullet,
+ onshape/native    Onshape REST API (mates)   links, inertia, collision,        MuJoCo, PyBullet,
  onshape/urdf-export  Onshape URDF export      SRDF, URDF, MJCF, ManiSkill,      SAPIEN, ManiSkill
  solidworks/native    sw2robot (in SW)         Isaac Lab, Gazebo files           (CPU + GPU)
  fusion/native        ACDC4Robot (in Fusion)
@@ -72,7 +72,7 @@ python3.11 -m venv .venv && . .venv/bin/activate && pip install -r requirements.
 Check the install:
 
 ```bash
-pytest -q                                    # ~5 s, 14 tests
+pytest -q                                    # ~5 s, 17 tests
 python -m cad2urdf.route --list              # prints the routing matrix
 ```
 
@@ -97,6 +97,15 @@ python -m cad2urdf.route --cad onshape --format urdf-export --sim maniskill --ru
 
 ### Option B: live document through the API (reads mates directly)
 
+cad2urdf has its own Onshape client (`cad2urdf/onshape.py`). It reads the assembly's mates as they are, with **no naming convention**:
+- fastened mates and rigid sub-assemblies → one link;
+- revolute → revolute (continuous if the mate has no limits);
+- slider → prismatic;
+- gear / rack-and-pinion / screw relations → mimic joints;
+- mate limits → joint limits.
+
+Masses come from the materials you assigned in Onshape, and meshes are fetched per part. Responses are cached in `~/.cache/cad2urdf/onshape`, so re-runs work offline.
+
 **1. Create API keys**
 - Sign in to Onshape and open **https://dev-portal.onshape.com/keys** (or profile icon → *Developer portal* → *API keys*).
 - Click **Create new API key** and tick read permissions only.
@@ -106,26 +115,19 @@ python -m cad2urdf.route --cad onshape --format urdf-export --sim maniskill --ru
 **2. Export them in your shell.** Never commit them. Put them in `~/.bashrc` or an untracked `.env` you `source`.
 
 ```bash
-export ONSHAPE_API=https://cad.onshape.com           # or https://yourteam.onshape.com for Enterprise
 export ONSHAPE_ACCESS_KEY=<access key>
 export ONSHAPE_SECRET_KEY=<secret key>
+# optional: ONSHAPE_API=https://yourteam.onshape.com  (defaults to the document URL's domain)
 ```
 
-**3. Name the moving mates.** onshape-to-robot turns only **mate connectors named `dof_<joint_name>`** into joints:
-- revolute / cylindrical → revolute;
-- slider → prismatic;
-- everything else → fixed.
-
-The first instance in the assembly, or the one marked *Fixed*, is the base. Gear relations become mimic joints.
-
-**4. Run with the assembly's URL.** The `/e/...` part must be the assembly tab:
+**3. Run with the assembly's URL.** The `/e/...` part must be the assembly tab:
 
 ```bash
 python -m cad2urdf.route --cad onshape --format native --sim maniskill --run \
     --input "https://cad.onshape.com/documents/<doc>/w/<workspace>/e/<assembly>" --out build/myrobot
 ```
 
-The API base is taken from the URL's domain automatically. More detail: [`docs/ONSHAPE_API_KEYS.md`](docs/ONSHAPE_API_KEYS.md).
+Anything the client can't map (ball or planar mates, kinematic loops, sliders without limits) is printed as a `REVIEW` line and can be fixed with `--spec`. More detail: [`docs/ONSHAPE_API_KEYS.md`](docs/ONSHAPE_API_KEYS.md).
 
 ---
 
@@ -188,13 +190,20 @@ python -m cad2urdf.validate build/robot --sims yourdfpy,mujoco,pybullet,sapien,m
 
 Each simulator drives every actuated joint to a test pose and reports stability, tracking error, mimic-joint error, penetration at rest and GPU consistency.
 
-### View
+### View it in the simulator
 
 ```bash
-python tests/view_urdf.py build/robot          # then open http://localhost:8080
+python -m cad2urdf.scene examples/field_cad/2026_ARC_3v3.step -o build/field      # generate first
+python tests/view_urdf.py build/field --sim maniskill                            # SAPIEN viewer window
+python tests/view_urdf.py build/field --sim mujoco                               # MuJoCo viewer
+python tests/view_urdf.py build/robot --sim maniskill --scene build/field --at 0 0 0.02   # robot on the field
+python tests/view_urdf.py build/robot                                            # browser: sliders, collision toggle, SRDF poses
+python tests/view_urdf.py build/field --sim maniskill --screenshot field.png     # save an image, no window
 ```
 
-A browser viewer with a slider per joint, visual/collision toggles, link frames, the SRDF's named poses, and a "sweep" button.
+Robots open holding their first keyframe under PD control.
+- **MuJoCo:** keys `2`/`3` toggle the visual and collision groups; the *Control* panel moves the joints.
+- **Browser mode** serves http://localhost:8080.
 
 ---
 
@@ -264,6 +273,7 @@ cad2urdf/
   cad.py                 STEP loading, B-rep mass properties, tessellation
   draft.py               deterministic spec draft for mate-less STEP
   joints.py              shaft/bore joint inference (k-d tree indexed)
+  onshape.py             Onshape REST client: mates, limits, mass properties, meshes → internal model
   ingest.py              exporter URDF → internal model
   model.py               internal model (links, joints, frames, inertia)
   collision.py           per-link collision modes + IoU scoring
@@ -271,7 +281,7 @@ cad2urdf/
   scene.py               static scenes (fields) + drop test
   validate.py            robot-agnostic checks in every local simulator
 examples/arm4/           parametric sample robot (build_cad.py → STEP → spec → outputs)
-tests/                   pytest suite + view_urdf.py (viewer)
+tests/                   pytest suite + view_urdf.py (ManiSkill / MuJoCo / browser viewer)
 docs/RESEARCH.md         research: tools, AI/MCP, joints, collision, dynamics, per-simulator needs
 docs/ONSHAPE_API_KEYS.md
 .agents/skills/cad2sim/  agent skill (Claude Code + Codex)
@@ -292,7 +302,8 @@ Covers:
 - the SRDF matrix;
 - the drafted spec on the sample STEP;
 - the URDF round trip (identical kinematics);
-- rotated-frame (Y-up) ingest.
+- rotated-frame (Y-up) ingest;
+- the Onshape front end against a fake API (mates → links and joints, limits, masses, MuJoCo load).
 
 ---
 
@@ -303,7 +314,7 @@ Covers:
 | STEP → any sim (sample arm) | ✅ fully automatic; 7 links and 6 joint types recovered from geometry; runs in MuJoCo, PyBullet, SAPIEN, ManiSkill CPU + GPU |
 | Exporter URDF → any sim (SolidWorks-exported infantry) | ✅ loads and runs in SAPIEN, ManiSkill (CPU + GPU) and MuJoCo (via our MJCF) |
 | Static scene (ARC 3v3 field, surface-only STEP) | ✅ 925 collision shapes; 0 of 400 drop-test balls fall through |
-| Onshape native (API) | ⚠️ wired up, not yet run against a live document |
+| Onshape native (own REST client) | ⚠️ tested offline against recorded API response shapes; not yet run against a live document |
 | Isaac Lab / Gazebo | ⚠️ files generated; Isaac Lab not executed; Gazebo checked with `gz sdf` conversion only |
 
 Known limitations:

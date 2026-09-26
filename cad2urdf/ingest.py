@@ -1,4 +1,4 @@
-"""Front end #2: an exporter's URDF (onshape-to-robot, Onshape native export,
+"""Front end #2: an exporter's URDF (Onshape's URDF export, onshape-to-robot,
 sw2robot / sw_urdf_exporter, ACDC4Robot / fusion2urdf, creo2urdf, ...) -> IR.
 
 The exporter has already done the part of the job it is good at: reading the

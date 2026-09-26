@@ -9,8 +9,8 @@ rtree
 manifold3d
 mujoco>=3.2              # SRDF self-collision sampling, MJCF validation, field drop test
 
-# --- Onshape front end ---
-onshape-to-robot>=1.8    # reads Onshape mates through the REST API (needs API keys)
+# --- Onshape front end (our own REST client) ---
+requests
 
 # --- validation, viewer, figures ---
 yourdfpy

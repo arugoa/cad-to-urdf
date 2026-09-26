@@ -6,7 +6,7 @@
         --input robot.step --out build/robot [--spec overrides.yaml]
     python -m cad2urdf.route --cad solidworks --format native --sim mujoco --run --input robot.urdf --out build/r
     python -m cad2urdf.route --cad onshape --format native --sim isaaclab --run \\
-        --input "https://cad.onshape.com/documents/..." --out build/r      # needs ONSHAPE_* keys
+        --input "https://cad.onshape.com/documents/..." --out build/r      # needs ONSHAPE_* keys (our own API client)
 
 Everything here is deterministic. The only judgment calls (joint limits,
 materials, mimic couplings for STEP input) are written as REVIEW lines in the
@@ -17,9 +17,7 @@ from __future__ import annotations
 
 import argparse
 import copy
-import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -36,27 +34,6 @@ def deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
-def _onshape_to_robot(url: str, out: Path) -> Path:
-    for k in ("ONSHAPE_ACCESS_KEY", "ONSHAPE_SECRET_KEY"):
-        if not os.environ.get(k):
-            sys.exit(f"{k} is not set. Create an API key pair in Onshape (My account -> Developer -> API keys) "
-                     "and export ONSHAPE_API=https://cad.onshape.com ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=...")
-    from urllib.parse import urlparse
-
-    host = urlparse(url).netloc  # enterprise domains (e.g. team.onshape.com) need their own API base
-    os.environ.setdefault("ONSHAPE_API", f"https://{host}")
-    exe = shutil.which("onshape-to-robot", path=str(Path(sys.executable).parent)) or shutil.which("onshape-to-robot")
-    if exe is None:
-        sys.exit("onshape-to-robot is not installed: pip install onshape-to-robot")
-    work = out / "onshape"
-    work.mkdir(parents=True, exist_ok=True)
-    cfg = {"url": url, "output_format": "urdf", "output_filename": "robot",
-           "merge_stls": False, "simplify_stls": False, "no_collision_meshes": False}
-    (work / "config.json").write_text(json.dumps(cfg, indent=2))
-    subprocess.run([exe, str(work)], check=True)
-    return work / "robot.urdf"
-
-
 def build_spec(args, fe: routes.FrontEnd, fin: routes.Finish) -> tuple[dict, list[str]]:
     review: list[str] = []
     user = yaml.safe_load(Path(args.spec).read_text()) if args.spec else {}
@@ -71,11 +48,10 @@ def build_spec(args, fe: routes.FrontEnd, fin: routes.Finish) -> tuple[dict, lis
             write_draft(spec, review, args.out / "robot_spec.draft.yaml")
             spec = deep_merge(spec, user)
     else:
-        src = args.input
-        if args.cad == "onshape" and args.format == "native" and str(src).startswith("http"):
-            src = _onshape_to_robot(src, args.out)
-        spec = deep_merge({"source": os.path.abspath(src)}, user)
-        spec["source"] = os.path.abspath(src)
+        src = str(args.input)
+        src = src if src.startswith("http") else os.path.abspath(src)  # Onshape URL or exporter URDF
+        spec = deep_merge({"source": src}, user)
+        spec["source"] = src
     spec.setdefault("collision", {})
     spec["collision"].setdefault("default", fin.collision_default)
     spec.setdefault("actuators", {"default": {"kind": "position", "kp": 100.0, "kv": 5.0}})

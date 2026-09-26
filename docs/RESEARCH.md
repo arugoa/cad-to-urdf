@@ -546,7 +546,7 @@ examples/arm4/
 
 | CAD | Best format (front end) | Runs headless on Linux? | Needs | Can also write directly | Fallback |
 |---|---|---|---|---|---|
-| **Onshape** | **native**: onshape-to-robot on the live document via REST | ✔ (API keys) | `dof_*` mate connectors, API keys | MJCF, SDF | **urdf-export**: Onshape's built-in URDF export (every mate becomes a joint, GLTF/STL meshes), then **step** |
+| **Onshape** | **native**: cad2urdf's own REST client (`onshape.py`) on the live document: all mates, limits, gear relations, Onshape mass properties | ✔ (API keys) | API keys (no naming convention) | — | **urdf-export**: Onshape's built-in URDF export (every mate becomes a joint, GLTF/STL meshes), then **step** |
 | **SolidWorks** | **native**: sw2robot (reads mates, infers tree/axes) | ✘ extract needs Windows + SW | SW session | MJCF | classic sw_urdf_exporter (manual, often Y-up → `root_rpy`), then **step** |
 | **Fusion** | **native**: ACDC4Robot | ✘ in Fusion (an LLM can drive it through the Fusion MCP) | Rigid/Revolute/Slider joints only | MJCF, SDFormat | fusion2urdf forks, then **step** |
 | **Creo** | **native**: creo2urdf from Mechanism connections | ✘ in Creo | **Toolkit licence**, CSYS naming, YAML | — | **step** (usual case without Toolkit) |
@@ -582,7 +582,7 @@ On `arm4` this recovers all 7 links and 6 joint types exactly ✅. It needs the 
 | onshape / **step** / maniskill | `arm4.step` (no hand-written spec) | drafted spec → 7 links, 6 joints; collision IoU 0.95–0.997 per link (`auto`), better than the hand-tuned spec; SAPIEN and ManiSkill CPU + GPU (64 envs) track the test pose ✅ |
 | solidworks / **native** / maniskill | TR infantry URDF (sw_urdf_exporter: Y-up, `package://`, massless dummy links, rotated frames) with `root_rpy` + `package_dirs` | loads and runs in SAPIEN, ManiSkill (CPU + GPU) and MuJoCo (our MJCF). **MuJoCo's own URDF import fails** on the massless links; our MJCF floors them. Tracking error on the virtual base joints comes from the input URDF's `friction="10"` ✅ |
 | urdf / native / all | round trip of the arm4 URDF through ingest | FK identical over 50 random poses, masses identical ✅ |
-| onshape / native | onshape-to-robot on a live document | **not run**: needs API keys (routed, untested) |
+| onshape / native | own REST client | tested offline against the API's response shapes (fake server); **live run pending API keys** |
 
 ### 9.4 What still needs an LLM or a human (the skill's job)
 
@@ -612,7 +612,7 @@ STEP    ─►│ B-rep: shaft/bore inference        │     │ inertia, meshes
 
 **Stages** (what exists in this repo is marked ✔):
 
-1. **Front end** → parts + joints. ✔ STEP (geometric, with a deterministic draft spec); ✔ any exporter URDF via `ingest.py` (rotated frames, `package://`, massless links, mimic); ✔ Onshape native via onshape-to-robot (wired, untested without keys). In-CAD exporters for SolidWorks/Fusion/Creo run in the CAD tool (§9).
+1. **Front end** → parts + joints. ✔ STEP (geometric, with a deterministic draft spec); ✔ any exporter URDF via `ingest.py` (rotated frames, `package://`, massless links, mimic); ✔ Onshape native via our own REST client (`onshape.py`; tested offline, live run pending keys). In-CAD exporters for SolidWorks/Fusion/Creo run in the CAD tool (§9).
 2. **Link grouping**: spec patterns ✔; union-find over touching / press-fit parts ✔ (`draft.py`).
 3. **Joint resolution**: native mates > naming conventions > geometric candidates ✔; the spec decides ambiguity ✔; loops/mimic ✔ (mimic), loops to do.
 4. **Mass properties** from B-rep × density ✔, overrides (to do), validity checks ✔.

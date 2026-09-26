@@ -27,9 +27,8 @@ Establish all three layers, from the user or the files present, before running a
 
 How to choose the format:
 - **Onshape:**
-  - With API keys and `dof_*` mate connectors: `native`.
-  - Mates exist but aren't named `dof_*`: `urdf-export`.
-  - Neither: `step`.
+  - With API keys: `native` (reads every mate; no naming convention needed).
+  - Without keys: `urdf-export` (Onshape's built-in export), else `step`.
 - **SolidWorks / Fusion / Creo:** `native` if the user can run the exporter inside the CAD tool (sw2robot, ACDC4Robot, creo2urdf). Otherwise `step`.
 - **A STEP file with no CAD access:** `step`.
 
@@ -42,7 +41,7 @@ python -m cad2urdf.route --list          # full matrix
 
 ## 2. Get the input
 
-- **Onshape native:** confirm `ONSHAPE_ACCESS_KEY` and `ONSHAPE_SECRET_KEY` are exported (never ask for them to be pasted into chat or committed). `--input` is the document URL. The router runs onshape-to-robot itself.
+- **Onshape native:** confirm `ONSHAPE_ACCESS_KEY` and `ONSHAPE_SECRET_KEY` are exported (never ask for them to be pasted into chat or committed). `--input` is the assembly URL. The router reads mates, limits, masses and meshes through cad2urdf's own Onshape client (responses cached in `~/.cache/cad2urdf/onshape`).
 - **In-CAD exporters** (the plan says `[runs inside the CAD tool]`): give the user the plan's steps. If a CAD MCP server is connected (Autodesk Fusion MCP, a SolidWorks COM MCP, CREOSON), you may drive the export yourself, then use the resulting URDF as `--input`.
 - **STEP:** export the whole assembly as one file (AP242/AP214), not one file per part.
 
