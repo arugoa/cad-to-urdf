@@ -177,6 +177,10 @@ def check_inertia(name: str, inertia: np.ndarray, mass: float) -> list[str]:
 def build(spec_path: Path) -> Robot:
     spec = yaml.safe_load(Path(spec_path).read_text())
     base = Path(spec_path).parent
+    if str(spec["source"]).startswith("http"):
+        from .onshape import build_from_onshape
+
+        return build_from_onshape(spec, base)
     if str(spec["source"]).lower().endswith(".urdf"):
         from .ingest import build_from_urdf
 

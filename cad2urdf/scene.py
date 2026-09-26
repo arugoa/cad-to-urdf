@@ -207,7 +207,10 @@ def _write_mjcf(path: Path, name: str, visuals, geoms) -> None:
     for i, g in enumerate(geoms):
         if g.kind == "mesh":
             ET.SubElement(asset, "mesh", name=f"{name}_col{i}", file=f"collision/{name}_{i}.stl")
+    vis = ET.SubElement(root, "visual")
+    ET.SubElement(vis, "headlight", ambient="0.4 0.4 0.4", diffuse="0.6 0.6 0.6")
     wb = ET.SubElement(root, "worldbody")
+    ET.SubElement(wb, "light", pos="0 0 6", dir="0 0 -1", directional="true", diffuse="0.6 0.6 0.6")
     for stem, rgba in visuals:
         ET.SubElement(wb, "geom", type="mesh", mesh=stem, rgba=fmt(rgba), contype="0", conaffinity="0", group="2")
     for i, g in enumerate(geoms):
@@ -238,7 +241,7 @@ import os
 import sapien
 
 _MESH = os.path.join(os.path.dirname(__file__), "..", "meshes")
-VISUALS = {[stem for stem, _ in visuals]!r}
+VISUALS = {[(stem, list(rgba)) for stem, rgba in visuals]!r}  # (mesh stem, rgba)
 BOXES = {boxes!r}  # (center, quat wxyz, half_size), metres
 CONVEX = {meshes!r}  # meshes/collision/{name}_<i>.stl, each one convex piece
 
@@ -246,8 +249,9 @@ CONVEX = {meshes!r}  # meshes/collision/{name}_<i>.stl, each one convex piece
 def build_{fn}(scene, pose=sapien.Pose(), collision=True, visual=True, static=True):
     b = scene.create_actor_builder()
     if visual:
-        for stem in VISUALS:
-            b.add_visual_from_file(os.path.join(_MESH, "visual", stem + ".glb"))
+        for stem, rgba in VISUALS:
+            b.add_visual_from_file(os.path.join(_MESH, "visual", stem + ".stl"),
+                                   material=sapien.render.RenderMaterial(base_color=rgba))
     if collision:
         for c, q, h in BOXES:
             b.add_box_collision(sapien.Pose(c, q), h)

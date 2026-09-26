@@ -1,6 +1,6 @@
 # Onshape API keys (for the `onshape / native` route)
 
-The router reads your real Onshape mates through the REST API (via onshape-to-robot). That needs an API key pair.
+The router reads your real Onshape mates through the Onshape REST API, using cad2urdf's own client (`cad2urdf/onshape.py`). That needs an API key pair.
 
 1. Sign in to Onshape with your team account, then open **https://dev-portal.onshape.com/keys**. You can also get there from Onshape: profile icon (top right) → **Developer portal** → **API keys**.
 2. Click **Create new API key**. Tick the read permissions only: *read your profile information* and *read your documents*.
@@ -25,9 +25,15 @@ The router reads your real Onshape mates through the REST API (via onshape-to-ro
 
 ## What your assembly needs for this route
 
-onshape-to-robot turns only **mate connectors named `dof_<joint>`** into joints: revolute/cylindrical become revolute, slider becomes prismatic. Everything else is fixed. The first instance in the assembly (or the one marked *Fixed*) is the base.
+Nothing special. Every mate is read as it is:
+- fastened mates and rigid sub-assemblies merge into one link;
+- revolute and slider mates become joints;
+- gear-type relations become mimic joints;
+- mate limits become joint limits.
 
-If your assembly doesn't use that naming, use Onshape's built-in URDF export instead. It needs no keys, and every mate becomes a joint: right-click the assembly tab → **Export** → **URDF**, then:
+The instance marked *Fixed* (or the heaviest group) is the base. Assign materials in Onshape so the masses are real; parts without a material get `default_density` from the spec.
+
+Without keys, you can use Onshape's built-in URDF export instead: right-click the assembly tab → **Export** → **URDF**, then:
 
 ```bash
 python -m cad2urdf.route --cad onshape --format urdf-export --sim maniskill --run --input <unzipped>/robot.urdf --out build/hero

@@ -52,21 +52,17 @@ STEP_FRONT = FrontEnd(
 
 FRONT_ENDS: dict[tuple[str, str], FrontEnd] = {
     ("onshape", "native"): FrontEnd(
-        tool="onshape-to-robot (Rhoban, v1.8+) via the Onshape REST API",
+        tool="cad2urdf Onshape front end (cad2urdf/onshape.py) via the Onshape REST API",
         produces="urdf",
         automatable_here=True,
         how=[
-            "In the Onshape assembly: add mate connectors named `dof_<joint>` on every moving mate "
-            "(revolute/cylindrical -> revolute, slider -> prismatic), set mate limits, make the base the first "
-            "instance (or Fixed). Gear relations become mimic joints; `closing_*` mates close loops.",
-            "Create an API key pair (Onshape -> My account -> Developer -> API keys) and export "
-            "ONSHAPE_API=https://cad.onshape.com ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=...",
-            "`--run --input <document URL>` writes config.json (output_format=urdf, per-part meshes kept) "
-            "and runs `onshape-to-robot`.",
+            "Create an API key pair (docs/ONSHAPE_API_KEYS.md) and export ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY.",
+            "`--run --input <assembly URL>`: reads every mate (fastened -> same link, revolute/slider -> joints, "
+            "gear relations -> mimic), mate limits, Onshape mass properties and per-part meshes.",
         ],
-        needs=["document URL", "API keys in the environment", "`dof_` mate-connector naming"],
-        caveats=["Without `dof_` names onshape-to-robot fixes everything: use Onshape's own URDF export instead."],
-        direct={"mujoco": "onshape-to-robot can write MJCF itself (output_format=mujoco)"},
+        needs=["assembly URL (the /e/ element must be the assembly tab)", "API keys in the environment"],
+        caveats=["Revolute mates without limits become continuous joints: set limits in Onshape or the spec.",
+                 "Ball/planar mates are not joints here (reported as REVIEW)."],
     ),
     ("onshape", "urdf-export"): FrontEnd(
         tool="Onshape native URDF export (v1.212+, Mar 2026)",
