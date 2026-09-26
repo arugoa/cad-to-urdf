@@ -42,5 +42,6 @@ class Arm4(BaseAgent):
             stiffness=500.0, damping=20.0,
             force_limit=20,
             mimic={'finger_right': {'joint': 'finger_left'}},
+            normalize_action=False,
         )
         return dict(pd_joint_pos=dict(arm=arm, gripper=gripper))

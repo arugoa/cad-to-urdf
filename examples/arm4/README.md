@@ -67,5 +67,7 @@ python -m cad2urdf.validate examples/arm4/output
 | PyBullet | needs `URDF_USE_INERTIA_FROM_FILE` (60% inertia error otherwise); mimic via gear constraint |
 | SAPIEN / ManiSkill | loads headless without visuals; reads SRDF but only applies `reason="Default"` pairs |
 | yourdfpy | loads; FK matches CAD |
+| ManiSkill 3.0.1 agent (RTX 3070 Ti) | CPU and GPU PhysX; 1,024 parallel envs at ~15.5k env-steps/s; reaches targets incl. mimic gripper (after fixing `normalize_action`) |
+| Gazebo Classic 11 (`gz sdf -p`) | URDF→SDF converts: 7 links, 7 joints, friction on all 43 collision geoms (not simulated: no `gazebo_ros2_control` installed) |
 
 ![collision modes](../../docs/img/collision_modes.png)

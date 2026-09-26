@@ -143,6 +143,7 @@ def maniskill_agent(robot: Robot, urdf_rel: str) -> str:
         f"            stiffness={g0.actuator['kp'] if g0 else 0}, damping={g0.actuator.get('kv', 0) if g0 else 0},",
         f"            force_limit={g0.effort if g0 else 0},",
         f"            mimic={mimic_map},",
+        "            normalize_action=False,",
         "        )",
         "        return dict(pd_joint_pos=dict(arm=arm, gripper=gripper))",
         "",
