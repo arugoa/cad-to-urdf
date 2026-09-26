@@ -106,11 +106,10 @@ cad2urdf has its own Onshape client (`cad2urdf/onshape.py`). It reads the assemb
 
 Masses come from the materials you assigned in Onshape, and meshes are fetched per part. Responses are cached in `~/.cache/cad2urdf/onshape`, so re-runs work offline.
 
-**1. Create API keys**
-- Sign in to Onshape and open **https://dev-portal.onshape.com/keys** (or profile icon → *Developer portal* → *API keys*).
-- Click **Create new API key** and tick read permissions only.
-- Copy the access key and the secret key. The secret is shown only once.
-- On an **Enterprise** domain (e.g. `yourteam.onshape.com`), an admin may need to allow API keys first.
+**1. Get API keys.** They're managed in your Onshape settings, not the old Developer portal:
+- **Personal account:** user icon → **My account** → **Developer** → **API keys** → **Create new API key** (read permissions only).
+- **Company / Enterprise account:** only an **admin** can create keys. They go to user icon → **Enterprise settings** → **Developer** → **API keys** → **Create new API key**, assign it to you, and send you both values.
+- The secret key is shown only once. No admin available? Use Option A instead.
 
 **2. Export them in your shell.** Never commit them. Put them in `~/.bashrc` or an untracked `.env` you `source`.
 
