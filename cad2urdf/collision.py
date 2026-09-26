@@ -54,15 +54,23 @@ def _hull_geom(mesh: trimesh.Trimesh, max_v: int, source: str) -> CollisionGeom:
     return CollisionGeom("mesh", np.eye(4), mesh=hull, source=source)
 
 
+def proper_frame(T: np.ndarray) -> np.ndarray:
+    """trimesh can return a mirrored (det -1) OBB frame; flip one axis so it is a rotation."""
+    T = np.array(T, dtype=float)
+    if np.linalg.det(T[:3, :3]) < 0:
+        T[:3, 2] *= -1
+    return T
+
+
 def _best_primitive(mesh: trimesh.Trimesh) -> tuple[CollisionGeom, float]:
     """Tightest of OBB / bounding cylinder / bounding sphere, and its fill ratio."""
     options = []
     obb = mesh.bounding_box_oriented
-    options.append((obb.volume, CollisionGeom("box", np.array(obb.primitive.transform), tuple(obb.primitive.extents))))
+    options.append((obb.volume, CollisionGeom("box", proper_frame(obb.primitive.transform), tuple(obb.primitive.extents))))
     try:
         cyl = mesh.bounding_cylinder
         p = cyl.primitive
-        options.append((cyl.volume, CollisionGeom("cylinder", np.array(p.transform), (p.radius, p.height))))
+        options.append((cyl.volume, CollisionGeom("cylinder", proper_frame(p.transform), (p.radius, p.height))))
     except Exception:  # degenerate meshes
         pass
     sph = mesh.bounding_sphere
@@ -95,7 +103,7 @@ def link_collisions(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
         return [CollisionGeom("mesh", np.eye(4), mesh=whole, source="raw")]
     if mode == "box":
         obb = whole.bounding_box_oriented
-        g = CollisionGeom("box", np.array(obb.primitive.transform), tuple(obb.primitive.extents), source="link-obb")
+        g = CollisionGeom("box", proper_frame(obb.primitive.transform), tuple(obb.primitive.extents), source="link-obb")
         return [_axis_align_box(g)]
     if mode == "hull":
         return [_hull_geom(whole, max_v, "link-hull")]

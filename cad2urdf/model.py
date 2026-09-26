@@ -186,6 +186,8 @@ def build(spec_path: Path) -> Robot:
 
     # 1. parts, materials, link assignment
     parts = cad.load_parts(base / spec["source"])
+    ignore = spec.get("ignore_parts", [])  # placeholder geometry: keep-out zones, reference bodies
+    parts = [p for p in parts if not any(fnmatch.fnmatch(p.name, pat) for pat in ignore)]
     link_of = {}
     for link_name, patterns in spec["links"].items():
         for p in parts:

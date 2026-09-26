@@ -50,10 +50,15 @@ def load_parts(step_path: Path) -> list[Part]:
             parts.append(Part(name=name, shape=solid))
 
     walk(root, "")
-    names = [p.name for p in parts]
-    dupes = {n for n in names if names.count(n) > 1}
-    if dupes:
-        raise ValueError(f"duplicate part names in STEP: {sorted(dupes)}")
+    # Real exports repeat names (268 x "REV-21", every screw): suffix duplicates deterministically.
+    seen: dict[str, int] = {}
+    counts: dict[str, int] = {}
+    for p in parts:
+        counts[p.name] = counts.get(p.name, 0) + 1
+    for p in parts:
+        if counts[p.name] > 1:
+            seen[p.name] = seen.get(p.name, 0) + 1
+            p.name = f"{p.name}#{seen[p.name]}"
     return parts
 
 
