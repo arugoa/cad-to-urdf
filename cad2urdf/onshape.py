@@ -14,7 +14,7 @@ Mass properties come from Onshape (the materials you assigned); meshes are
 fetched per part as binary STL in metres. Every response is cached on disk
 (``~/.cache/cad2urdf/onshape``) so re-runs are offline and repeatable.
 
-Auth: API keys from https://dev-portal.onshape.com/keys, exported as
+Auth: API keys (Onshape settings -> Developer -> API keys; see docs/ONSHAPE_API_KEYS.md), exported as
 ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY (HTTP Basic auth). ONSHAPE_API
 defaults to the document URL's domain, so Enterprise domains work.
 
