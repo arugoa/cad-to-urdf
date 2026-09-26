@@ -4,7 +4,7 @@ controller_manager:
     update_rate: 500
     joint_state_broadcaster: {type: joint_state_broadcaster/JointStateBroadcaster}
     arm_controller: {type: joint_trajectory_controller/JointTrajectoryController}
-    gripper_controller: {type: position_controllers/GripperActionController}
+    finger_left_controller: {type: position_controllers/GripperActionController}
 
 arm_controller:
   ros__parameters:
@@ -12,6 +12,6 @@ arm_controller:
     command_interfaces: [position]
     state_interfaces: [position, velocity]
 
-gripper_controller:
+finger_left_controller:
   ros__parameters:
     joint: finger_left

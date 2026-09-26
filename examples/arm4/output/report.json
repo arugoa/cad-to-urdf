@@ -2,7 +2,7 @@
   "robot": "arm4",
   "joint_candidates": [
     "base_link <-> turret: revolute    axis=[0.0, 0.0, 1.0] origin=[0.0, 0.0, 0.072] r=14.8mm engagement=20.0mm free_shaft=20.0mm  [turret_disc->base_housing]",
-    "turret <-> upper_arm: revolute    axis=[-0.0, 1.0, -0.0] origin=[0.0, 0.0, 0.15] r=6.0mm engagement=20.0mm free_shaft=24.0mm  [shoulder_pin->turret_clevis_left, shoulder_pin->turret_clevis_right]",
+    "turret <-> upper_arm: revolute    axis=[-0.0, 1.0, -0.0] origin=[0.0, 0.0, 0.15] r=6.0mm engagement=16.0mm free_shaft=20.0mm  [shoulder_pin->turret_clevis_left, shoulder_pin->turret_clevis_right]",
     "forearm <-> upper_arm: revolute    axis=[-0.0, 1.0, -0.0] origin=[0.0, 0.0, 0.4] r=5.0mm engagement=40.0mm free_shaft=42.0mm  [elbow_pin->upper_arm_beam]",
     "forearm <-> gripper_base: revolute    axis=[0.0, 0.0, 1.0] origin=[0.0, 0.0, 0.6225] r=8.0mm engagement=15.0mm free_shaft=15.0mm  [wrist_flange->forearm_spacer]",
     "finger_left <-> gripper_base: cylindrical axis=[-0.0, 1.0, -0.0] origin=[0.0, 0.018, 0.677] r=4.0mm engagement=20.0mm free_shaft=74.0mm  [gripper_rail->finger_left]",
@@ -81,32 +81,31 @@
     "upper_arm": {
       "parts": [
         "upper_arm_beam",
-        "shoulder_pin",
-        "elbow_motor"
+        "shoulder_pin"
       ],
-      "mass_kg": 1.07731,
+      "mass_kg": 0.77782,
       "com_m": [
         0.0,
-        -0.01236,
-        0.15314
+        0.0,
+        0.11698
       ],
       "inertia_diag": [
-        0.01160842,
-        0.01117361,
-        0.00071089
+        0.00724199,
+        0.00723782,
+        0.000221
       ],
       "inertia_issues": [],
       "collision_mode": "decompose",
       "collision": {
-        "geoms": 16,
+        "geoms": 13,
         "kinds": [
           "mesh"
         ],
-        "iou": 0.761,
+        "iou": 0.747,
         "coverage": 0.999,
-        "excess": 0.238,
+        "excess": 0.253,
         "max_hull_vertices": 64,
-        "total_vertices": 890
+        "total_vertices": 749
       }
     },
     "forearm": {
@@ -114,32 +113,33 @@
         "forearm_plate_left",
         "forearm_plate_right",
         "forearm_spacer",
-        "elbow_pin"
+        "elbow_pin",
+        "elbow_motor"
       ],
-      "mass_kg": 0.35053,
+      "mass_kg": 0.64647,
       "com_m": [
         -0.0,
-        0.0,
-        0.12418
+        -0.01923,
+        0.06733
       ],
       "inertia_diag": [
-        0.00250967,
-        0.00238184,
-        0.00017692
+        0.00531903,
+        0.00491554,
+        0.00051177
       ],
       "inertia_issues": [],
       "collision_mode": "primitives",
       "collision": {
-        "geoms": 4,
+        "geoms": 5,
         "kinds": [
           "box",
           "cylinder"
         ],
-        "iou": 0.968,
-        "coverage": 1.0,
-        "excess": 0.032,
+        "iou": 0.974,
+        "coverage": 0.999,
+        "excess": 0.025,
         "max_hull_vertices": 0,
-        "total_vertices": 90
+        "total_vertices": 156
       }
     },
     "gripper_base": {
@@ -258,10 +258,10 @@
   "collision_sampling": {
     "samples": 5000,
     "pairs_seen_colliding": {
-      "forearm|gripper_base": 5000,
-      "finger_left|gripper_base": 5000,
-      "turret|upper_arm": 5000,
       "forearm|upper_arm": 5000,
+      "turret|upper_arm": 5000,
+      "finger_left|gripper_base": 5000,
+      "forearm|gripper_base": 5000,
       "base_link|turret": 5000,
       "finger_right|gripper_base": 5000,
       "base_link|forearm": 14,
@@ -281,7 +281,7 @@
         "excess": 0.595,
         "max_hull_vertices": 0,
         "total_vertices": 8,
-        "seconds": 0.13
+        "seconds": 0.09
       },
       "primitives": {
         "geoms": 2,
@@ -294,7 +294,7 @@
         "excess": 0.017,
         "max_hull_vertices": 0,
         "total_vertices": 74,
-        "seconds": 0.1
+        "seconds": 0.08
       },
       "hull": {
         "geoms": 1,
@@ -306,7 +306,7 @@
         "excess": 0.422,
         "max_hull_vertices": 64,
         "total_vertices": 64,
-        "seconds": 0.12
+        "seconds": 0.1
       },
       "decompose@0.05": {
         "geoms": 8,
@@ -318,7 +318,7 @@
         "excess": 0.138,
         "max_hull_vertices": 64,
         "total_vertices": 509,
-        "seconds": 24.84
+        "seconds": 14.1
       },
       "decompose@0.02": {
         "geoms": 32,
@@ -330,7 +330,7 @@
         "excess": 0.094,
         "max_hull_vertices": 64,
         "total_vertices": 1629,
-        "seconds": 53.05
+        "seconds": 25.2
       }
     },
     "turret": {
@@ -344,7 +344,7 @@
         "excess": 0.822,
         "max_hull_vertices": 0,
         "total_vertices": 8,
-        "seconds": 0.11
+        "seconds": 0.08
       },
       "primitives": {
         "geoms": 4,
@@ -358,7 +358,7 @@
         "excess": 0.188,
         "max_hull_vertices": 64,
         "total_vertices": 146,
-        "seconds": 0.15
+        "seconds": 0.11
       },
       "hull": {
         "geoms": 1,
@@ -370,7 +370,7 @@
         "excess": 0.641,
         "max_hull_vertices": 64,
         "total_vertices": 64,
-        "seconds": 0.13
+        "seconds": 0.09
       },
       "decompose@0.05": {
         "geoms": 8,
@@ -382,7 +382,7 @@
         "excess": 0.124,
         "max_hull_vertices": 64,
         "total_vertices": 511,
-        "seconds": 34.32
+        "seconds": 21.53
       },
       "decompose@0.02": {
         "geoms": 31,
@@ -394,7 +394,7 @@
         "excess": 0.093,
         "max_hull_vertices": 64,
         "total_vertices": 1470,
-        "seconds": 41.09
+        "seconds": 22.52
       }
     },
     "upper_arm": {
@@ -403,61 +403,61 @@
         "kinds": [
           "box"
         ],
-        "iou": 0.324,
+        "iou": 0.395,
         "coverage": 1.0,
-        "excess": 0.676,
+        "excess": 0.605,
         "max_hull_vertices": 0,
         "total_vertices": 8,
-        "seconds": 0.13
+        "seconds": 0.1
       },
       "primitives": {
-        "geoms": 3,
+        "geoms": 2,
         "kinds": [
           "box",
           "cylinder"
         ],
-        "iou": 0.617,
-        "coverage": 0.999,
-        "excess": 0.383,
+        "iou": 0.587,
+        "coverage": 1.0,
+        "excess": 0.413,
         "max_hull_vertices": 0,
-        "total_vertices": 140,
-        "seconds": 0.16
+        "total_vertices": 74,
+        "seconds": 0.11
       },
       "hull": {
         "geoms": 1,
         "kinds": [
           "mesh"
         ],
-        "iou": 0.395,
-        "coverage": 0.999,
-        "excess": 0.605,
+        "iou": 0.507,
+        "coverage": 0.998,
+        "excess": 0.493,
         "max_hull_vertices": 64,
         "total_vertices": 64,
-        "seconds": 0.16
+        "seconds": 0.1
       },
       "decompose@0.05": {
-        "geoms": 8,
+        "geoms": 6,
         "kinds": [
           "mesh"
         ],
-        "iou": 0.731,
-        "coverage": 0.999,
-        "excess": 0.268,
+        "iou": 0.695,
+        "coverage": 1.0,
+        "excess": 0.305,
         "max_hull_vertices": 64,
-        "total_vertices": 467,
-        "seconds": 8.14
+        "total_vertices": 366,
+        "seconds": 5.0
       },
       "decompose@0.02": {
-        "geoms": 17,
+        "geoms": 13,
         "kinds": [
           "mesh"
         ],
-        "iou": 0.762,
+        "iou": 0.747,
         "coverage": 0.999,
-        "excess": 0.238,
+        "excess": 0.253,
         "max_hull_vertices": 64,
-        "total_vertices": 954,
-        "seconds": 9.85
+        "total_vertices": 749,
+        "seconds": 5.97
       }
     },
     "forearm": {
@@ -466,61 +466,61 @@
         "kinds": [
           "box"
         ],
-        "iou": 0.303,
+        "iou": 0.188,
         "coverage": 1.0,
-        "excess": 0.697,
+        "excess": 0.812,
         "max_hull_vertices": 0,
         "total_vertices": 8,
-        "seconds": 0.11
+        "seconds": 0.08
       },
       "primitives": {
-        "geoms": 4,
+        "geoms": 5,
         "kinds": [
           "box",
           "cylinder"
         ],
-        "iou": 0.968,
-        "coverage": 1.0,
-        "excess": 0.032,
+        "iou": 0.974,
+        "coverage": 0.999,
+        "excess": 0.025,
         "max_hull_vertices": 0,
-        "total_vertices": 90,
-        "seconds": 0.13
+        "total_vertices": 156,
+        "seconds": 0.1
       },
       "hull": {
         "geoms": 1,
         "kinds": [
           "mesh"
         ],
-        "iou": 0.307,
-        "coverage": 1.0,
-        "excess": 0.693,
-        "max_hull_vertices": 34,
-        "total_vertices": 34,
-        "seconds": 0.1
+        "iou": 0.268,
+        "coverage": 0.999,
+        "excess": 0.732,
+        "max_hull_vertices": 64,
+        "total_vertices": 64,
+        "seconds": 0.08
       },
       "decompose@0.05": {
         "geoms": 8,
         "kinds": [
           "mesh"
         ],
-        "iou": 0.588,
-        "coverage": 0.995,
-        "excess": 0.41,
+        "iou": 0.689,
+        "coverage": 1.0,
+        "excess": 0.311,
         "max_hull_vertices": 64,
-        "total_vertices": 364,
-        "seconds": 6.43
+        "total_vertices": 371,
+        "seconds": 5.36
       },
       "decompose@0.02": {
-        "geoms": 19,
+        "geoms": 22,
         "kinds": [
           "mesh"
         ],
-        "iou": 0.688,
-        "coverage": 1.0,
-        "excess": 0.312,
+        "iou": 0.709,
+        "coverage": 0.999,
+        "excess": 0.291,
         "max_hull_vertices": 64,
-        "total_vertices": 786,
-        "seconds": 7.6
+        "total_vertices": 879,
+        "seconds": 6.25
       }
     },
     "gripper_base": {
@@ -534,7 +534,7 @@
         "excess": 0.701,
         "max_hull_vertices": 0,
         "total_vertices": 8,
-        "seconds": 0.12
+        "seconds": 0.08
       },
       "primitives": {
         "geoms": 5,
@@ -547,7 +547,7 @@
         "excess": 0.153,
         "max_hull_vertices": 0,
         "total_vertices": 156,
-        "seconds": 0.18
+        "seconds": 0.12
       },
       "hull": {
         "geoms": 1,
@@ -559,7 +559,7 @@
         "excess": 0.461,
         "max_hull_vertices": 64,
         "total_vertices": 64,
-        "seconds": 0.15
+        "seconds": 0.09
       },
       "decompose@0.05": {
         "geoms": 8,
@@ -571,7 +571,7 @@
         "excess": 0.218,
         "max_hull_vertices": 64,
         "total_vertices": 511,
-        "seconds": 21.62
+        "seconds": 14.02
       },
       "decompose@0.02": {
         "geoms": 21,
@@ -583,7 +583,7 @@
         "excess": 0.091,
         "max_hull_vertices": 64,
         "total_vertices": 1245,
-        "seconds": 25.24
+        "seconds": 15.77
       }
     },
     "finger_left": {
@@ -597,7 +597,7 @@
         "excess": 0.605,
         "max_hull_vertices": 0,
         "total_vertices": 8,
-        "seconds": 0.13
+        "seconds": 0.09
       },
       "primitives": {
         "geoms": 1,
@@ -609,7 +609,7 @@
         "excess": 0.437,
         "max_hull_vertices": 12,
         "total_vertices": 12,
-        "seconds": 0.18
+        "seconds": 0.1
       },
       "hull": {
         "geoms": 1,
@@ -621,7 +621,7 @@
         "excess": 0.437,
         "max_hull_vertices": 12,
         "total_vertices": 12,
-        "seconds": 0.14
+        "seconds": 0.09
       },
       "decompose@0.05": {
         "geoms": 5,
@@ -633,7 +633,7 @@
         "excess": 0.028,
         "max_hull_vertices": 14,
         "total_vertices": 55,
-        "seconds": 1.69
+        "seconds": 1.13
       },
       "decompose@0.02": {
         "geoms": 9,
@@ -645,7 +645,7 @@
         "excess": 0.009,
         "max_hull_vertices": 14,
         "total_vertices": 87,
-        "seconds": 2.41
+        "seconds": 1.56
       }
     },
     "finger_right": {
@@ -659,7 +659,7 @@
         "excess": 0.609,
         "max_hull_vertices": 0,
         "total_vertices": 8,
-        "seconds": 0.12
+        "seconds": 0.09
       },
       "primitives": {
         "geoms": 1,
@@ -671,7 +671,7 @@
         "excess": 0.439,
         "max_hull_vertices": 12,
         "total_vertices": 12,
-        "seconds": 0.13
+        "seconds": 0.1
       },
       "hull": {
         "geoms": 1,
@@ -683,7 +683,7 @@
         "excess": 0.439,
         "max_hull_vertices": 12,
         "total_vertices": 12,
-        "seconds": 0.12
+        "seconds": 0.09
       },
       "decompose@0.05": {
         "geoms": 6,
@@ -695,7 +695,7 @@
         "excess": 0.022,
         "max_hull_vertices": 14,
         "total_vertices": 64,
-        "seconds": 2.06
+        "seconds": 1.42
       },
       "decompose@0.02": {
         "geoms": 10,
@@ -707,7 +707,7 @@
         "excess": 0.008,
         "max_hull_vertices": 13,
         "total_vertices": 102,
-        "seconds": 2.53
+        "seconds": 1.61
       }
     }
   }

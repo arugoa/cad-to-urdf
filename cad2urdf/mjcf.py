@@ -15,12 +15,22 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .model import Robot
-from .urdf import MATERIAL_RGBA, fmt
+from .urdf import fmt
 
 
 def _quat(T: np.ndarray) -> str:
     x, y, z, w = Rotation.from_matrix(T[:3, :3]).as_quat()
     return fmt((w, x, y, z))
+
+
+MIN_MASS = 1e-4  # kg: MuJoCo rejects massless moving bodies (URDF dummy links often have mass 0)
+
+
+def _mass_inertia(link) -> tuple[float, np.ndarray]:
+    if link.mass > 0 and np.linalg.eigvalsh(link.inertia).min() > 0:
+        return link.mass, link.inertia
+    m = max(link.mass, MIN_MASS)
+    return m, np.eye(3) * m * 1e-4  # a 1 cm-ish sphere-like inertia
 
 
 def build_mjcf(
@@ -31,6 +41,7 @@ def build_mjcf(
     floor: bool = True,
     filterparent: bool = True,
     collision_only: bool = False,
+    floating: bool = True,
 ) -> ET.ElementTree:
     spec = robot.spec
     fr = spec.get("contact", {}).get("friction", [1.0, 0.005, 0.0001])
@@ -47,12 +58,12 @@ def build_mjcf(
     ET.SubElement(col, "geom", group="3", friction=fmt(fr), condim="4", density="0", rgba="0.2 0.6 1 0.4")
 
     asset = ET.SubElement(root, "asset")
-    for mat, rgba in MATERIAL_RGBA.items():
+    for mat, rgba in robot.materials.items():
         ET.SubElement(asset, "material", name=mat, rgba=rgba)
     for link in robot.links.values():
         if not collision_only:
-            for mat in link.visuals:
-                ET.SubElement(asset, "mesh", name=f"{link.name}_{mat}", file=f"visual/{link.name}_{mat}.stl")
+            for key in link.visuals:
+                ET.SubElement(asset, "mesh", name=f"{link.name}_{key}", file=f"visual/{link.name}_{key}.stl")
         for i, g in enumerate(link.collisions):
             if g.kind == "mesh":
                 ET.SubElement(asset, "mesh", name=f"{link.name}_col{i}", file=f"collision/{link.name}_{i}.stl")
@@ -60,26 +71,36 @@ def build_mjcf(
     world = ET.SubElement(root, "worldbody")
     if floor:
         ET.SubElement(world, "light", pos="0 0 3", dir="0 0 -1", directional="true")
-        ET.SubElement(world, "geom", name="floor", type="plane", size="2 2 0.1", rgba="0.9 0.9 0.9 1")
+        ET.SubElement(world, "geom", name="floor", type="plane", size="10 10 0.1", rgba="0.9 0.9 0.9 1")
 
     def add_body(parent_el: ET.Element, name: str):
         link = robot.links[name]
         j = robot.parent_joint(name)
-        pos = link.origin - (robot.links[j.parent].origin if j else np.zeros(3))
-        body = ET.SubElement(parent_el, "body", name=name, pos=fmt(pos))
-        I = link.inertia
-        ET.SubElement(body, "inertial", pos=fmt(link.com), mass=f"{link.mass:.6g}",
+        if j is None:
+            pos, R = link.origin, link.rotation
+        else:
+            pos, R = robot.child_in_parent(j)
+        T = np.eye(4)
+        T[:3, :3] = R
+        body = ET.SubElement(parent_el, "body", name=name, pos=fmt(pos), quat=_quat(T))
+        mass, I = _mass_inertia(link)
+        ET.SubElement(body, "inertial", pos=fmt(link.com), mass=f"{mass:.6g}",
                       fullinertia=fmt((I[0, 0], I[1, 1], I[2, 2], I[0, 1], I[0, 2], I[1, 2])))
-        if j is not None:
-            attrs = dict(name=j.name, type="hinge" if j.type == "revolute" else "slide",
-                         axis=fmt(np.where(np.abs(j.axis) < 1e-9, 0, j.axis)), range=fmt((j.lower, j.upper)),
+        if j is None and robot.floating_base and floating:
+            ET.SubElement(body, "freejoint", name="root")
+        if j is not None and j.type != "fixed":
+            attrs = dict(name=j.name, type="slide" if j.type == "prismatic" else "hinge",
+                         axis=fmt(robot.axis_local(j)),
                          damping=f"{j.damping:.6g}", frictionloss=f"{j.friction:.6g}", armature=f"{j.armature:.6g}")
+            if j.type != "continuous":
+                attrs["range"] = fmt((j.lower, j.upper))
             if j.effort:
                 attrs["actuatorfrcrange"] = fmt((-j.effort, j.effort))
             ET.SubElement(body, "joint", attrs)
         if not collision_only:
-            for mat in link.visuals:
-                ET.SubElement(body, "geom", {"class": "visual", "type": "mesh", "mesh": f"{name}_{mat}", "material": mat})
+            for key in link.visuals:
+                ET.SubElement(body, "geom", {"class": "visual", "type": "mesh", "mesh": f"{name}_{key}",
+                                             "material": link.material(key)})
         for i, g in enumerate(link.collisions):
             a = {"class": "collision", "name": f"{name}_col{i}"}
             if g.kind == "mesh":
@@ -98,7 +119,8 @@ def build_mjcf(
 
     add_body(world, robot.root)
     # a site at the tool centre point, handy for IK / task code
-    tcp = world.find(f".//body[@name='{robot.spec['srdf']['end_effector']['parent_link']}']") if "srdf" in spec else None
+    ee = spec.get("srdf", {}).get("end_effector")
+    tcp = world.find(f".//body[@name='{ee['parent_link']}']") if ee else None
     if tcp is not None:
         ET.SubElement(tcp, "site", name="tcp", pos="0 0 0.12", size="0.005")
 
@@ -117,19 +139,24 @@ def build_mjcf(
 
     act = ET.SubElement(root, "actuator")
     ctrl_joints = []
-    for j in robot.joints.values():
+    for j in robot.moving_joints():
         a = j.actuator
-        if a.get("kind", "none") == "none":
+        if a.get("kind", "none") == "none" or j.mimic:
             continue
         ctrl_joints.append(j.name)
-        ET.SubElement(act, "position", name=j.name, joint=j.name, kp=f"{a['kp']:.6g}", kv=f"{a.get('kv', 0):.6g}",
-                      ctrlrange=fmt((j.lower, j.upper)), forcerange=fmt((-j.effort, j.effort)))
+        attrs = dict(name=j.name, joint=j.name, kp=f"{a['kp']:.6g}", kv=f"{a.get('kv', 0):.6g}")
+        if j.type != "continuous":
+            attrs["ctrlrange"] = fmt((j.lower, j.upper))
+        if j.effort:
+            attrs["forcerange"] = fmt((-j.effort, j.effort))
+        ET.SubElement(act, "position", attrs)
 
     if keyframes:
         kf = ET.SubElement(root, "keyframe")
         order = [j.name for j in _joint_order(robot)]
+        root_q = list(robot.links[robot.root].origin) + [1, 0, 0, 0] if robot.floating_base and floating else []
         for kname, q in keyframes.items():
-            qpos = [q.get(n, 0.0) for n in order]
+            qpos = root_q + [q.get(n, 0.0) for n in order]
             ctrl = [q.get(n, 0.0) for n in ctrl_joints]
             ET.SubElement(kf, "key", name=kname, qpos=fmt(qpos), ctrl=fmt(ctrl))
 
@@ -139,7 +166,7 @@ def build_mjcf(
 
 def _joint_order(robot: Robot):
     """Joints in MJCF depth-first body order (== qpos order)."""
-    return [robot.parent_joint(n) for n in robot.ordered_links() if robot.parent_joint(n)]
+    return robot.moving_joints()
 
 
 def write_mjcf(robot: Robot, path: Path, **kw) -> None:

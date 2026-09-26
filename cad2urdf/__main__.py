@@ -53,8 +53,7 @@ def main(argv=None):
     excludes = [p for p, r in disabled.items() if r in ("Adjacent", "Default", "Always")]
     keyframes = {}
     for name, st in s.get("group_states", {}).items():
-        if st["group"] == "arm":
-            keyframes[name] = srdf.expand_mimic(robot, {**{j: 0.0 for j in robot.joints}, **st["joints"]})
+        keyframes[name] = srdf.expand_mimic(robot, {**{j: 0.0 for j in robot.joints}, **st["joints"]})
     mjcf.write_mjcf(robot, out / "mjcf" / f"{robot.name}.xml", meshdir="../meshes", excludes=excludes,
                     keyframes=keyframes)
     targets.write_targets(robot, out)

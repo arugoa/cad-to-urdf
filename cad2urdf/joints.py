@@ -53,6 +53,7 @@ class JointCandidate:
     shaft_length: float  # free shaft length: not held by its own link's bores (m)
     type_hint: str
     evidence: list[str] = field(default_factory=list)
+    clearance: float = 0.0  # radial, smallest over the matched shaft/bore pairs (m); 0 => press fit
 
     def summary(self) -> str:
         d = np.round(self.direction, 3).tolist()
@@ -169,6 +170,7 @@ def infer_joints(
                 shaft_length=free,
                 type_hint=hint,
                 evidence=sorted({f"{g[0].part}->{g[1].part}" for g in group}),
+                clearance=min(g[1].radius - g[0].radius for g in group),
             )
         )
     return out

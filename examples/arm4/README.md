@@ -12,8 +12,8 @@ The STEP file keeps names, placements and exact B-rep, but **no mates**, just li
 |---|---|
 | base | `base_plate`, `base_housing` (bore Ø29.8), `base_bolt_1..4` |
 | turret | `turret_disc` (with Ø29.6 shaft), `turret_clevis_left/right` (Ø12.2 holes), `shoulder_motor` |
-| upper arm | `upper_arm_beam` (slotted, Ø10.2 elbow bore), `shoulder_pin` (Ø12), `elbow_motor` |
-| forearm | `forearm_plate_left/right`, `forearm_spacer` (Ø16.2 wrist bore), `elbow_pin` (Ø10) |
+| upper arm | `upper_arm_beam` (slotted, Ø10.2 elbow bore), `shoulder_pin` (Ø12, pressed into the beam) |
+| forearm | `forearm_plate_left/right`, `forearm_spacer` (Ø16.2 wrist bore), `elbow_pin` (Ø10), `elbow_motor` |
 | gripper base | `wrist_flange` (Ø16 shaft), `gripper_palm`, `gripper_rail` (Ø8), `gripper_rail_post_left/right` |
 | fingers | `finger_left`, `finger_right` (carriage with Ø8.2 bore on the rail + blade) |
 
@@ -31,6 +31,14 @@ The STEP file keeps names, placements and exact B-rep, but **no mates**, just li
 - **SRDF semantics**: groups, named states, end effector, passive joints.
 
 ## 3. Run
+
+With no spec at all, the router drafts one deterministically from the geometry. It recovers the same 7 links and 6 joint types:
+
+```bash
+python -m cad2urdf.route --cad onshape --format step --sim maniskill --run --input examples/arm4/cad/arm4.step --out build/arm4
+```
+
+With the hand-written spec:
 
 ```bash
 python -m cad2urdf examples/arm4/robot_spec.yaml -o examples/arm4/output --study
@@ -56,18 +64,18 @@ python -m cad2urdf.validate examples/arm4/output
 
 **Joints recovered from geometry:** all 6. The rail interfaces come back as `cylindrical` (could slide or spin), and the spec resolves them to prismatic.
 
-**Collision** (IoU vs exact CAD volume): base 0.97, turret 0.81, upper arm 0.76, forearm 0.97, gripper base 0.85, fingers 0.98. That is 43 collision geoms in total, versus 10.5k visual triangles.
+**Collision** (IoU vs exact CAD volume): base 0.97, turret 0.81, upper arm 0.75, forearm 0.97, gripper base 0.85, fingers 0.98. That is 41 collision geoms in total, versus 10.5k visual triangles.
 
 **Validation:**
 
 | Target | Outcome |
 |---|---|
-| MuJoCo (MJCF) | no penetration at home; stable; tracks `ready` within 0.013 rad; mimic fingers symmetric |
+| MuJoCo (MJCF) | no penetration at home; stable; tracks the test pose within 0.009 rad under gravity; mimic fingers within 0.2 mm |
 | MuJoCo (URDF) | loads; visuals dropped by default, no actuators, armature 0, mimic → equality |
 | PyBullet | needs `URDF_USE_INERTIA_FROM_FILE` (60% inertia error otherwise); mimic via gear constraint |
 | SAPIEN / ManiSkill | loads headless without visuals; reads SRDF but only applies `reason="Default"` pairs |
 | yourdfpy | loads; FK matches CAD |
 | ManiSkill 3.0.1 agent (RTX 3070 Ti) | CPU and GPU PhysX; 1,024 parallel envs at ~15.5k env-steps/s; reaches targets incl. mimic gripper (after fixing `normalize_action`) |
-| Gazebo Classic 11 (`gz sdf -p`) | URDF→SDF converts: 7 links, 7 joints, friction on all 43 collision geoms (not simulated: no `gazebo_ros2_control` installed) |
+| Gazebo Classic 11 (`gz sdf -p`) | URDF→SDF converts: 7 links, 7 joints, friction on every collision geom (not simulated: no `gazebo_ros2_control` installed) |
 
 ![collision modes](../../docs/img/collision_modes.png)

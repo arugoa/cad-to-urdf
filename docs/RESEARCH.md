@@ -20,8 +20,9 @@
 6. [How dynamics get into each simulator](#6-how-dynamics-get-into-each-simulator)
 7. [How URDF/SRDF needs differ per simulator](#7-how-urdfsrdf-needs-differ-per-simulator)
 8. [Worked sample: `arm4` (CAD → URDF/SRDF/MJCF)](#8-worked-sample-arm4)
-9. [Proposed architecture for this project](#9-proposed-architecture)
-10. [Sources](#10-sources)
+9. [Routing: CAD × format × simulator](#9-routing-cad--format--simulator)
+10. [Proposed architecture for this project](#10-proposed-architecture)
+11. [Sources](#11-sources)
 
 ---
 
@@ -29,7 +30,7 @@
 
 1. **Every CAD package already has at least one exporter, but they are one-to-one and one-size-fits-all.** Onshape (native URDF export since v1.212, Mar 2026, plus `onshape-to-robot` v1.8.3), SolidWorks (`sw_urdf_exporter`, and the newer `sw2robot`/`solidworks_urdf_exporter2`), Fusion (`fusion2urdf` forks, ACDC4Robot) and Creo (`creo2urdf`) are covered. None of them provides **per-link collision granularity**, a **sampled SRDF**, and **simulator-specific dynamics** together. Only `onshape-to-robot` comes close. The gap is the multi-target compiler, not the CAD reader.
 2. **Joints are recoverable three ways, from best to worst:** (a) native mates or joints through the CAD API, (b) naming conventions in the CAD tree (`dof_*` in Onshape, `*_CSYS` in Creo), (c) geometric inference from a mate-less STEP file. We implemented (c). On the sample it recovers all 6 joints' axes and origins from shaft-in-bore geometry alone. It correctly flags the linear rail as ambiguous ("cylindrical": slide *or* spin), which a spec then resolves ✅.
-3. **No single collision strategy wins.** On the sample, per-part primitives beat CoACD for plate-and-pin links: forearm IoU **0.97 vs 0.59** at the same budget. CoACD wins for L-shaped fingers (**0.97 vs 0.56**). Whole-link hulls and boxes are poor for anything non-convex (IoU 0.2–0.6) ✅. So collision mode must be a **per-link** choice, and it should be scored automatically.
+3. **No single collision strategy wins.** On the sample, per-part primitives beat CoACD for plate-and-pin links: forearm IoU **0.97 vs 0.69** at the same budget. CoACD wins for L-shaped fingers (**0.97 vs 0.56**). Whole-link hulls and boxes are poor for anything non-convex (IoU 0.2–0.6) ✅. So collision mode must be a **per-link** choice, and it should be scored automatically.
 4. **URDF cannot carry most of the dynamics.** It has mass, COM, inertia, `damping`, `friction`, effort and velocity limits. It has no armature, actuator gains or models, contact or friction material, or restitution. Each simulator takes these through its own side channel: MJCF, `ArticulationCfg`, ManiSkill agent class, `<gazebo>` tags + ros2_control, `changeDynamics`, `drake:` tags. The converter should emit those side files from one IR instead of patching a URDF.
 5. **Simulators read the same URDF differently.** Five surprises we reproduced:
    - MuJoCo 3.14 imports URDF `<mimic>` as an equality constraint, but drops armature and fuses a fixed root link into the world. It then *does not* filter contacts between the base and the first moving link. You need explicit `<exclude>`s ✅.
@@ -314,8 +315,8 @@ Monte-Carlo IoU between the exact CAD parts and the collision set (60k samples p
 |---|---|---|---|---|---|---|
 | base_link (plate + housing + 4 bolts) | 0.41 | **0.97** (2 geoms) | 0.58 | 0.85 (8) | 0.90 (32) | primitives |
 | turret (disc/shaft, clevises, motor) | 0.18 | 0.81 (4) | 0.36 | **0.86** (8) | 0.89 (31) | primitives (cheaper, close) |
-| upper_arm (slotted beam, pin, motor) | 0.32 | 0.62 (3) | 0.40 | 0.73 (8) | **0.76** (17) | decompose 0.02 |
-| forearm (2 plates, spacer, pin) | 0.30 | **0.97** (4) | 0.31 | 0.59 (8) | 0.69 (19) | primitives |
+| upper_arm (slotted beam, pin) | 0.40 | 0.59 (2) | 0.51 | 0.69 (6) | **0.75** (13) | decompose 0.02 |
+| forearm (2 plates, spacer, pin, motor) | 0.19 | **0.97** (5) | 0.27 | 0.69 (8) | 0.71 (22) | primitives |
 | gripper_base (flange, palm, rail, posts) | 0.30 | 0.85 (5) | 0.54 | 0.78 (8) | **0.90** (21) | primitives |
 | finger (L-shaped) | 0.40 | 0.56 (1) | 0.56 | **0.97** (5) | 0.99 (9) | decompose 0.03 |
 
@@ -324,7 +325,7 @@ Runtime: primitives and hulls take ~0.1 s per link; CoACD takes 2–50 s per lin
 ![Collision modes](img/collision_modes.png)
 
 **Takeaways**
-1. **Primitive-per-part is the best default for machined assemblies.** CAD parts are usually individually convex-ish (plates, cylinders). The link is non-convex only because of how they're arranged. Decomposing the *union* throws that structure away. That is why CoACD scores 0.59 on the forearm, where primitives score 0.97.
+1. **Primitive-per-part is the best default for machined assemblies.** CAD parts are usually individually convex-ish (plates, cylinders). The link is non-convex only because of how they're arranged. Decomposing the *union* throws that structure away. That is why CoACD scores 0.69 on the forearm, where primitives score 0.97.
 2. **Decompose only where the part itself is non-convex and the concavity matters for contact:** fingers, hooks, pockets.
 3. **Culling small parts** (bolts: 0.2% of base volume) costs < 1% coverage and removes most contacts.
 4. **Always score.** Coverage < 0.98 means something was dropped. Excess > 0.3 means spurious contact (e.g. the slotted beam).
@@ -420,7 +421,7 @@ URDF covers only the first two rows and part of the third (`<dynamics damping fr
 | Mesh paths | Relative sub-dirs OK in 3.14 ✅; **`package://` not resolved** ✅; `meshdir`/`strippath` compiler options | `package://` via `ros_package_paths` ✅ source | relative to URDF ✅ | `package://`/`model://` via resource paths | relative ✅ | `package://` via package map | relative |
 | Mesh formats | STL, OBJ, MSH (no DAE) 💭 | STL, OBJ, DAE 💭 | GLB/PLY preferred; STL sometimes fails 🔗 | STL, DAE, OBJ | STL, OBJ | OBJ (glTF for visuals) 💭 | STL/OBJ/GLB 💭 |
 | Collision | every mesh geom → **its convex hull**; one convex piece per file | one `collision_type` for the whole robot: `Convex Hull` (default), `Convex Decomposition`, `Bounding Sphere/Cube` ✅ source; **≤ 64 verts/hull** on GPU 💭; SDF colliders possible, expensive 🔗 | one convex per collision mesh file unless `load_multiple_collisions` / `multiple_collisions_decomposition="coacd"` ✅ source | mesh collision (engine dependent) | dynamic meshes → convex | convex or hydroelastic compliant meshes | `convexify` → CoACD 🔗 |
-| Visuals on import | URDF: **visuals discarded by default** (43 vs 56 geoms) ✅; keep with `discardvisual="false"` | kept | kept (**needs a GPU render device**; headless load requires stripping visuals) ✅ | kept | kept | kept | kept |
+| Visuals on import | URDF: **visuals discarded by default** (41 vs 54 geoms) ✅; keep with `discardvisual="false"` | kept | kept (**needs a GPU render device**; headless load requires stripping visuals) ✅ | kept | kept | kept | kept |
 | Fixed base / root | root link fused into world (`fusestatic`) ✅ | `fix_base=True` | `fix_root_link=True` | add `world` link + fixed joint | `useFixedBase=True` | weld in code | option |
 | Fixed joints | fused (`fusestatic`) | `merge_fixed_joints=True` default ✅ source | kept | **lumped** unless `preserveFixedJoint` 🔗 | kept | kept | merged 💭 |
 | Actuators / gains | MJCF `<actuator>` (URDF import gives **nu = 0**) ✅ | Python `ArticulationCfg.actuators` | Python agent controllers | ros2_control + gz_ros2_control | runtime API | code / `<transmission>` | runtime API |
@@ -482,8 +483,8 @@ examples/arm4/
 |---|---|---|---|
 | base_link | base_plate, base_housing, base_bolt_1..4 | 2.316 kg | primitives: box + cylinder (bolts culled) |
 | turret | turret_disc, turret_clevis_left/right, shoulder_motor | 1.291 kg | primitives (disc+shaft → hull) |
-| upper_arm | upper_arm_beam, shoulder_pin, elbow_motor | 1.077 kg | CoACD 0.02, 16 hulls |
-| forearm | forearm_plate_left/right, forearm_spacer, elbow_pin | 0.351 kg | primitives: 3 boxes + cylinder |
+| upper_arm | upper_arm_beam, shoulder_pin | 0.778 kg | CoACD 0.02, 13 hulls |
+| forearm | forearm_plate_left/right, forearm_spacer, elbow_pin, elbow_motor | 0.646 kg | primitives: 3 boxes + 2 cylinders |
 | gripper_base | wrist_flange, gripper_palm, gripper_rail, rail posts | 0.168 kg | primitives |
 | finger_left/right | finger_* | 0.018 kg | CoACD 0.03, 6 hulls |
 
@@ -525,15 +526,74 @@ examples/arm4/
 | Target | Result |
 |---|---|
 | yourdfpy | loads; 7 links; 5 actuated (mimic excluded); FK gripper_base z = 0.6225 m matches CAD |
-| MuJoCo ← URDF | loads (relative sub-dir paths OK); **visuals discarded** (43 geoms vs 56 with `discardvisual=false`); mimic → 1 equality; damping/frictionloss mapped; **armature 0**; **no actuators**; root fused into world; moving-link masses match; `package://` URDF **fails** |
-| MuJoCo ← MJCF | 5 actuators, 1 equality, 2 keyframes; **no penetration at home** (after adding Adjacent excludes; before, base↔turret penetrated); stable 3 s; tracks `ready` within 0.013 rad under gravity; gripper opens symmetrically (7.99 / 7.98 mm) |
+| MuJoCo ← URDF | loads (relative sub-dir paths OK); **visuals discarded** (41 geoms vs 54 with `discardvisual=false`); mimic → 1 equality; damping/frictionloss mapped; **armature 0**; **no actuators**; root fused into world; moving-link masses match; `package://` URDF **fails** |
+| MuJoCo ← MJCF | 5 actuators, 1 equality, 4 keyframes; **no penetration at home** (after adding Adjacent excludes; before, base↔turret penetrated); stable 3 s; tracks the test pose within 0.009 rad under gravity (finite servo stiffness); mimic finger error 0.2 mm |
 | PyBullet 3.2.7 | inertia error **60%** with default flags → **0%** with `URDF_USE_INERTIA_FROM_FILE`; damping/friction read; no self-contacts at home with parent exclusion; mimic emulated with a gear constraint; reaches targets |
 | SAPIEN 3.0.3 (ManiSkill backend) | loads (visuals stripped for headless); 6 active joints (mimic is independent); SRDF found automatically, **0 pairs applied** because none are `reason="Default"`; mass 5.24 kg; PD drives reach targets |
-| Isaac Lab, Gazebo, ManiSkill agent | **generated, not executed** (no GPU / ROS in this environment) |
+| ManiSkill 3.0.1 agent (RTX 3070 Ti) | CPU and GPU PhysX (64 envs, identical across envs); tracks the test pose; mimic gripper exact (after fixing `normalize_action`) |
+| Gazebo Classic 11 | `gz sdf -p` converts the Gazebo URDF (not simulated: no `gazebo_ros2_control`) |
+| Isaac Lab | **generated, not executed** (not installed) |
 
 ---
 
-## 9. Proposed architecture
+## 9. Routing: CAD × format × simulator
+
+*Implemented as `python -m cad2urdf.route` (deterministic) and the `cad2sim` skill (`.agents/skills/cad2sim`, symlinked into `.claude/skills`) for the steps that need judgment.*
+
+**Principle.** Mature exporters already read each CAD package's mates well, so they are the **front end** (layers 1 and 2). No exporter produces per-link collision, a sampled SRDF, dynamics beyond URDF, or files for several simulators. That is the **finish** stage (layer 3), and it's the same compiler for every route. A plain URDF→URDF "sim-to-sim" step would lose the per-part structure the finish needs. So the front end hands over its URDF *with one visual per part*, and the finish ingests that (`cad2urdf/ingest.py`).
+
+### 9.1 Layers 1 + 2: front end per CAD and format
+
+| CAD | Best format (front end) | Runs headless on Linux? | Needs | Can also write directly | Fallback |
+|---|---|---|---|---|---|
+| **Onshape** | **native**: onshape-to-robot on the live document via REST | ✔ (API keys) | `dof_*` mate connectors, API keys | MJCF, SDF | **urdf-export**: Onshape's built-in URDF export (every mate becomes a joint, GLTF/STL meshes), then **step** |
+| **SolidWorks** | **native**: sw2robot (reads mates, infers tree/axes) | ✘ extract needs Windows + SW | SW session | MJCF | classic sw_urdf_exporter (manual, often Y-up → `root_rpy`), then **step** |
+| **Fusion** | **native**: ACDC4Robot | ✘ in Fusion (an LLM can drive it through the Fusion MCP) | Rigid/Revolute/Slider joints only | MJCF, SDFormat | fusion2urdf forks, then **step** |
+| **Creo** | **native**: creo2urdf from Mechanism connections | ✘ in Creo | **Toolkit licence**, CSYS naming, YAML | — | **step** (usual case without Toolkit) |
+| **any** | **step**: `cad2urdf.draft` + geometric joints | ✔ | one STEP of the whole assembly; running fits drawn with clearance | — | — |
+| existing URDF | **urdf**: ingest as-is | ✔ | `package_dirs`, `root_rpy` if needed | — | — |
+
+**When to choose STEP over native:** only when you have no access to the CAD tool or its API, or no licence (Creo Toolkit). STEP loses the mates, so joints come from the geometry rules below, and limits and mimic couplings must be supplied by hand.
+
+**Deterministic STEP draft** (`cad2urdf/draft.py`), rules:
+1. Parts whose B-reps touch form one link, unless the contact is a running fit.
+2. A **running fit** is a coaxial shaft and bore with radial clearance of 0.005–0.15 mm. Zero clearance is a press fit (fixed). More than 0.15 mm is a fastener hole (fixed if the parts touch elsewhere).
+3. The root link is the component with parts named base/chassis/frame, otherwise the largest one.
+4. The joint tree is built breadth-first over running fits, preferring the longest engagement.
+5. A fit with a long free shaft is "cylindrical" and is drafted as prismatic.
+6. Limits, materials and mimic couplings are emitted as `REVIEW` lines.
+
+On `arm4` this recovers all 7 links and 6 joint types exactly ✅. It needs the one modelling convention in rule 2. Without it, a motor face touching a pin end welds two links together, which is how it caught two modelling errors in the original sample.
+
+### 9.2 Layer 3: finish per simulator
+
+| Simulator | Files written | Collision default | Simulator-specific handling |
+|---|---|---|---|
+| **ManiSkill** | URDF + SRDF + `maniskill/<robot>_agent.py` | `auto`: per part, a primitive (≥ 80% fill), else a hull (small or near-convex), else CoACD; all ≤ 64 verts | `load_multiple_collisions=False`; mimic via `PDJointPosMimicController(normalize_action=False)`; SRDF honoured only for `reason="Default"` |
+| **MuJoCo** | `mjcf/<robot>.xml` (+ URDF) | same | armature, position actuators, `<equality>` for mimic, `<contact><exclude>` incl. Adjacent pairs, keyframes, mass floor for massless dummy links |
+| **Isaac Lab** | URDF + `isaaclab/<robot>_cfg.py` | same | `UrdfFileCfg(collision_from_visuals=False)`; gains, armature, friction and limits in `ImplicitActuatorCfg`; zero limits omitted |
+| **Gazebo** | `gazebo/<robot>.gazebo.urdf` + `controllers.yaml` | same | `package://` paths, world link, `<gazebo>` friction, `<ros2_control>` |
+| **PyBullet** | URDF + SRDF | same | load flags `URDF_USE_INERTIA_FROM_FILE \| URDF_USE_SELF_COLLISION(_EXCLUDE_PARENT)`; gear constraints for mimic |
+
+### 9.3 Verified routes (this machine: RTX 3070 Ti)
+
+| Route | Input | Result |
+|---|---|---|
+| onshape / **step** / maniskill | `arm4.step` (no hand-written spec) | drafted spec → 7 links, 6 joints; collision IoU 0.95–0.997 per link (`auto`), better than the hand-tuned spec; SAPIEN and ManiSkill CPU + GPU (64 envs) track the test pose ✅ |
+| solidworks / **native** / maniskill | TR infantry URDF (sw_urdf_exporter: Y-up, `package://`, massless dummy links, rotated frames) with `root_rpy` + `package_dirs` | loads and runs in SAPIEN, ManiSkill (CPU + GPU) and MuJoCo (our MJCF). **MuJoCo's own URDF import fails** on the massless links; our MJCF floors them. Tracking error on the virtual base joints comes from the input URDF's `friction="10"` ✅ |
+| urdf / native / all | round trip of the arm4 URDF through ingest | FK identical over 50 random poses, masses identical ✅ |
+| onshape / native | onshape-to-robot on a live document | **not run**: needs API keys (routed, untested) |
+
+### 9.4 What still needs an LLM or a human (the skill's job)
+
+- Resolving `REVIEW` items for STEP input: joint limits, cylindrical fits (slide or spin), materials and measured masses, mimic couplings.
+- Driving in-CAD exporters when a CAD MCP server is connected (Fusion MCP, SolidWorks COM MCP, CREOSON).
+- Reading `validation.json` and turning symptoms into spec changes (the table in `SKILL.md`).
+- Static scenery (e.g. surface-only competition fields) is **not** a robot route. It needs a separate static-scene path.
+
+---
+
+## 10. Proposed architecture
 
 ```
           ┌────────── CAD adapters ───────────┐
@@ -552,16 +612,16 @@ STEP    ─►│ B-rep: shaft/bore inference        │     │ inertia, meshes
 
 **Stages** (what exists in this repo is marked ✔):
 
-1. **Adapter** → parts (B-rep, name, material, placement) + *optional* native joints/mates. ✔ STEP adapter. Onshape/Fusion/SolidWorks/Creo adapters to do (sketches in §4).
-2. **Link grouping**: spec patterns ✔; union-find over fixed relations (to do for native adapters).
+1. **Front end** → parts + joints. ✔ STEP (geometric, with a deterministic draft spec); ✔ any exporter URDF via `ingest.py` (rotated frames, `package://`, massless links, mimic); ✔ Onshape native via onshape-to-robot (wired, untested without keys). In-CAD exporters for SolidWorks/Fusion/Creo run in the CAD tool (§9).
+2. **Link grouping**: spec patterns ✔; union-find over touching / press-fit parts ✔ (`draft.py`).
 3. **Joint resolution**: native mates > naming conventions > geometric candidates ✔; the spec decides ambiguity ✔; loops/mimic ✔ (mimic), loops to do.
 4. **Mass properties** from B-rep × density ✔, overrides (to do), validity checks ✔.
 5. **Visual meshes** per link per material ✔ (glTF/GLB with colours: to do, better for SAPIEN/Isaac).
 6. **Collision** per-link modes ✔, scoring ✔, study ✔, sphere sets for planners (to do).
 7. **SRDF** with sampled matrix ✔.
 8. **Writers** ✔ URDF/Gazebo/MJCF/SRDF/Isaac/ManiSkill; Drake `drake:` tags and USD direct (to do).
-9. **Validation harness** ✔ MuJoCo/PyBullet/SAPIEN/yourdfpy; Isaac/Gazebo in CI with GPU/ROS images (to do).
-10. **AI loop**: an LLM drafts `robot_spec.yaml` from the part list, the candidate report and renders, then iterates on validation output (to do: prompt + tool wrapper; works manually from Claude Code today).
+9. **Validation harness** ✔ robot-agnostic: MuJoCo/PyBullet/SAPIEN/ManiSkill (CPU + GPU)/yourdfpy; Isaac/Gazebo in CI with GPU/ROS images (to do).
+10. **Router + skill** ✔ `cad2urdf.route` picks and runs the route; the `cad2sim` skill (Claude Code + Codex) handles REVIEW items, in-CAD exports and validation feedback.
 
 **Granularity spec (the key user-facing artifact).** `examples/arm4/robot_spec.yaml` shows the full schema: materials, part→material patterns, links (part patterns), joints (type, limits, effort, velocity, sign, mimic; axis/origin `auto`), dynamics (damping, friction, armature), actuators (kind, kp, kv), contact, per-link collision (mode + params, max hull vertices), visual tessellation, and SRDF (groups, states, end effector, passive joints, sample count).
 
@@ -575,7 +635,7 @@ STEP    ─►│ B-rep: shaft/bore inference        │     │ inertia, meshes
 
 ---
 
-## 10. Sources
+## 11. Sources
 
 Tools
 - onshape-to-robot: [GitHub](https://github.com/Rhoban/onshape-to-robot) (source read locally, v1.8.3), [design docs](https://onshape-to-robot.readthedocs.io/en/latest/design.html)

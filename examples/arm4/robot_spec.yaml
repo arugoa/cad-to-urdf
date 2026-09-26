@@ -35,8 +35,8 @@ part_materials:
 links:
   base_link:    ["base_*"]
   turret:       ["turret_*", "shoulder_motor"]
-  upper_arm:    ["upper_arm_*", "shoulder_pin", "elbow_motor"]
-  forearm:      ["forearm_*", "elbow_pin"]
+  upper_arm:    ["upper_arm_*", "shoulder_pin"]
+  forearm:      ["forearm_*", "elbow_pin", "elbow_motor"]
   gripper_base: ["wrist_flange", "gripper_palm", "gripper_rail", "gripper_rail_post_*"]
   finger_left:  ["finger_left"]
   finger_right: ["finger_right"]

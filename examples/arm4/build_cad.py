@@ -87,8 +87,7 @@ def build_parts():
     beam -= cyl_y(5.0 + CLEARANCE / 2, 40, (0, 0, Z_ELBOW))  # elbow bore
     beam -= box(20, 50, L_UPPER - 80, (0, 0, Z_SHOULDER + L_UPPER / 2))  # lightening slot
     p["upper_arm_beam"] = (beam, "aluminum")
-    p["shoulder_pin"] = (cyl_y(pin_r, 64, (0, 0, Z_SHOULDER)), "steel")
-    p["elbow_motor"] = (cyl_y(20, 30, (0, -45, Z_ELBOW)), "steel")
+    p["shoulder_pin"] = (cyl_y(pin_r, 60, (0, 0, Z_SHOULDER)), "steel")  # ends inside the clevis plates
 
     # ---- forearm (rotates about Y at the elbow): two side plates, spacer, pin
     for side, y in (("left", 24.0), ("right", -24.0)):
@@ -100,6 +99,7 @@ def build_parts():
     spacer -= cyl_z(8.0 + CLEARANCE / 2, Z_WRIST - 15, Z_WRIST)  # wrist bore
     p["forearm_spacer"] = (spacer, "aluminum")
     p["elbow_pin"] = (cyl_y(5.0, 54, (0, 0, Z_ELBOW)), "steel")
+    p["elbow_motor"] = (cyl_y(20, 30, (0, -42, Z_ELBOW)), "steel")  # bolted to the right forearm plate
 
     # ---- gripper base (rolls about Z at the wrist): flange+shaft, palm, rail, rail posts
     flange = cyl_z(20, Z_WRIST, Z_WRIST + 15) + cyl_z(8.0, Z_WRIST - 15, Z_WRIST)
