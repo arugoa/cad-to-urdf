@@ -17,7 +17,7 @@ from .model import Robot
 
 
 def _actuated(robot: Robot):
-    return [j for j in robot.joints.values() if j.actuator.get("kind", "none") != "none"]
+    return [j for j in robot.moving_joints() if j.actuator.get("kind", "none") != "none"]
 
 
 def _home(robot: Robot) -> dict[str, float]:
@@ -25,7 +25,7 @@ def _home(robot: Robot) -> dict[str, float]:
     from .srdf import expand_mimic
 
     home = robot.spec.get("srdf", {}).get("group_states", {}).get("home", {}).get("joints", {})
-    return expand_mimic(robot, {j: home.get(j, 0.0) for j in robot.joints})
+    return expand_mimic(robot, {j.name: home.get(j.name, 0.0) for j in robot.moving_joints()})
 
 
 def isaaclab_cfg(robot: Robot, urdf_rel: str) -> str:
@@ -44,7 +44,7 @@ def isaaclab_cfg(robot: Robot, urdf_rel: str) -> str:
         f"{robot.name.upper()}_CFG = ArticulationCfg(",
         "    spawn=sim_utils.UrdfFileCfg(",
         f'        asset_path=os.path.join(_HERE, "{urdf_rel}"),',
-        "        fix_base=True,",
+        f"        fix_base={not robot.floating_base},",
         "        merge_fixed_joints=True,",
         "        # Collision comes from the URDF <collision> elements, which cad2urdf already made",
         "        # convex (primitives / <=64-vertex hulls). The importer then only has to cook them.",
@@ -62,7 +62,7 @@ def isaaclab_cfg(robot: Robot, urdf_rel: str) -> str:
         "    ),",
         "    actuators={",
     ]
-    for j in robot.joints.values():
+    for j in robot.moving_joints():
         a = j.actuator
         if a.get("kind", "none") == "none" and not j.mimic:
             continue
@@ -74,31 +74,68 @@ def isaaclab_cfg(robot: Robot, urdf_rel: str) -> str:
             f"            damping={kv:.6g},",
             f"            armature={j.armature:.6g},",
             f"            friction={j.friction:.6g},",
-            f"            joint_effort_limit={j.effort:.6g},",
-            f"            joint_velocity_limit={j.velocity:.6g},",
+            *([f"            joint_effort_limit={j.effort:.6g},"] if j.effort else []),
+            *([f"            joint_velocity_limit={j.velocity:.6g},"] if j.velocity else []),
             "        ),",
         ]
     lines += ["    },", ")", ""]
     return "\n".join(lines)
 
 
-def maniskill_agent(robot: Robot, urdf_rel: str) -> str:
+def _groups(robot: Robot):
+    """Split actuated joints into a plain PD group and one group per mimic leader."""
     act = _actuated(robot)
-    mimic = [j for j in robot.joints.values() if j.mimic]
-    fr = robot.spec.get("contact", {}).get("friction", [1.0])[0]
-    states = robot.spec.get("srdf", {}).get("group_states", {})
+    followers = [j for j in robot.moving_joints() if j.mimic]
+    leaders = {j.mimic["joint"] for j in followers}
+    plain = [j for j in act if j.name not in leaders and not j.mimic]
+    mimic_groups = [(robot.joints[l], [f for f in followers if f.mimic["joint"] == l]) for l in sorted(leaders)]
+    return plain, mimic_groups
+
+
+def _force(j) -> float:
+    return j.effort if j.effort else 1e10  # ManiSkill's default "unlimited"
+
+
+def maniskill_agent(robot: Robot, urdf_rel: str) -> str:
     from .srdf import expand_mimic
 
-    order = [j.name for j in robot.joints.values()]  # URDF joint order; ManiSkill uses active joints
+    plain, mimic_groups = _groups(robot)
+    fr = robot.spec.get("contact", {}).get("friction", [1.0])[0]
+    states = robot.spec.get("srdf", {}).get("group_states", {})
+    order = [j.name for j in robot.moving_joints()]  # == SAPIEN active-joint order
     kf = []
-    for name in ("home", "ready"):
-        if name in states:
-            q = expand_mimic(robot, {**{j: 0.0 for j in robot.joints}, **states[name]["joints"]})
-            kf.append(f'        {name}=Keyframe(qpos=np.array([{", ".join(f"{q[n]:.4g}" for n in order)}]), pose=sapien.Pose()),')
-    arm = [j for j in act if j.type == "revolute"]
-    grip = [j for j in act if j.type == "prismatic"]
-    g0 = grip[0] if grip else None
-    mimic_map = {j.name: {"joint": j.mimic["joint"]} for j in mimic}
+    for name, st in states.items():
+        q = expand_mimic(robot, {**{n: 0.0 for n in order}, **st["joints"]})
+        kf.append(f'        {name}=Keyframe(qpos=np.array([{", ".join(f"{q[n]:.4g}" for n in order)}]), pose=sapien.Pose()),')
+    body = []
+    if plain:
+        body += [
+            "        arm = PDJointPosControllerConfig(",
+            f"            {[j.name for j in plain]},",
+            "            lower=None, upper=None,",
+            f"            stiffness={[j.actuator.get('kp', 0.0) for j in plain]},",
+            f"            damping={[j.actuator.get('kv', 0.0) for j in plain]},",
+            f"            force_limit={[_force(j) for j in plain]},",
+            "            normalize_action=False,",
+            "        )",
+        ]
+    names = ["arm"] if plain else []
+    for i, (lead, fol) in enumerate(mimic_groups):
+        g = "gripper" if len(mimic_groups) == 1 else f"mimic_{lead.name}"
+        names.append(g)
+        mimic_map = {f.name: {"joint": lead.name, "multiplier": f.mimic.get("multiplier", 1.0),
+                              "offset": f.mimic.get("offset", 0.0)} for f in fol}
+        body += [
+            f"        {g} = PDJointPosMimicControllerConfig(",
+            f"            {[lead.name] + [f.name for f in fol]},",
+            f"            lower={lead.lower}, upper={lead.upper},",
+            f"            stiffness={lead.actuator.get('kp', 0.0)}, damping={lead.actuator.get('kv', 0.0)},",
+            f"            force_limit={_force(lead)},",
+            f"            mimic={mimic_map},",
+            "            normalize_action=False,  # targets in joint units (rad / m), not [-1, 1]",
+            "        )",
+        ]
+    body.append(f"        return dict(pd_joint_pos=dict({', '.join(f'{n}={n}' for n in names)}))")
     return "\n".join([
         f'"""ManiSkill 3 agent for {robot.name} (generated by cad2urdf)."""',
         "",
@@ -113,12 +150,12 @@ def maniskill_agent(robot: Robot, urdf_rel: str) -> str:
         "",
         "",
         "@register_agent()",
-        f"class {robot.name.capitalize()}(BaseAgent):",
+        f"class {''.join(w.capitalize() for w in robot.name.split('_'))}(BaseAgent):",
         f'    uid = "{robot.name}"',
         f'    urdf_path = os.path.join(os.path.dirname(__file__), "{urdf_rel}")',
         "    # SAPIEN reads the SRDF next to the URDF automatically, but only reason=\"Default\" pairs.",
         "    load_multiple_collisions = False  # every collision STL is already a single convex piece",
-        "    fix_root_link = True",
+        f"    fix_root_link = {not robot.floating_base}",
         "    urdf_config = dict(",
         f"        _materials=dict(default=dict(static_friction={fr}, dynamic_friction={fr}, restitution=0.0)),",
         "        link={" + ", ".join(f'"{l}": dict(material="default")' for l in robot.links) + "},",
@@ -129,51 +166,30 @@ def maniskill_agent(robot: Robot, urdf_rel: str) -> str:
         "",
         "    @property",
         "    def _controller_configs(self):",
-        "        arm = PDJointPosControllerConfig(",
-        f"            {[j.name for j in arm]},",
-        "            lower=None, upper=None,",
-        f"            stiffness={[j.actuator['kp'] for j in arm]},",
-        f"            damping={[j.actuator.get('kv', 0.0) for j in arm]},",
-        f"            force_limit={[j.effort for j in arm]},",
-        "            normalize_action=False,",
-        "        )",
-        "        gripper = PDJointPosMimicControllerConfig(",
-        f"            {[g0.name] + [j.name for j in mimic] if g0 else []},",
-        f"            lower={g0.lower if g0 else 0}, upper={g0.upper if g0 else 0},",
-        f"            stiffness={g0.actuator['kp'] if g0 else 0}, damping={g0.actuator.get('kv', 0) if g0 else 0},",
-        f"            force_limit={g0.effort if g0 else 0},",
-        f"            mimic={mimic_map},",
-        "            normalize_action=False,",
-        "        )",
-        "        return dict(pd_joint_pos=dict(arm=arm, gripper=gripper))",
+        *body,
         "",
     ])
 
 
 def gazebo_controllers(robot: Robot) -> str:
-    act = _actuated(robot)
-    arm = [j.name for j in act if j.type == "revolute"]
-    grip = [j.name for j in act if j.type == "prismatic"]
-    return "\n".join([
+    plain, mimic_groups = _groups(robot)
+    lines = [
         "# ros2_control controllers for gz_ros2_control (generated by cad2urdf)",
         "controller_manager:",
         "  ros__parameters:",
         "    update_rate: 500",
         "    joint_state_broadcaster: {type: joint_state_broadcaster/JointStateBroadcaster}",
-        "    arm_controller: {type: joint_trajectory_controller/JointTrajectoryController}",
-        "    gripper_controller: {type: position_controllers/GripperActionController}",
-        "",
-        "arm_controller:",
-        "  ros__parameters:",
-        f"    joints: [{', '.join(arm)}]",
-        "    command_interfaces: [position]",
-        "    state_interfaces: [position, velocity]",
-        "",
-        "gripper_controller:",
-        "  ros__parameters:",
-        f"    joint: {grip[0] if grip else ''}",
-        "",
-    ])
+    ]
+    if plain:
+        lines.append("    arm_controller: {type: joint_trajectory_controller/JointTrajectoryController}")
+    for lead, _ in mimic_groups:
+        lines.append(f"    {lead.name}_controller: {{type: position_controllers/GripperActionController}}")
+    if plain:
+        lines += ["", "arm_controller:", "  ros__parameters:", f"    joints: [{', '.join(j.name for j in plain)}]",
+                  "    command_interfaces: [position]", "    state_interfaces: [position, velocity]"]
+    for lead, _ in mimic_groups:
+        lines += ["", f"{lead.name}_controller:", "  ros__parameters:", f"    joint: {lead.name}"]
+    return "\n".join(lines) + "\n"
 
 
 def write_targets(robot: Robot, out: Path) -> None:

@@ -2,8 +2,9 @@
 
 Every exporter (URDF, SRDF, MJCF, Gazebo, Isaac Lab, ManiSkill) reads this IR;
 none of them re-reads the CAD. Frames follow the URDF convention: each link
-frame sits at its parent joint's origin, axis-aligned with the world in the
-zero configuration of the CAD model.
+frame sits at its parent joint's origin. Its orientation in the world at the
+zero configuration is ``Link.rotation``: identity for the STEP front end,
+whatever the exporter chose for URDF inputs (see ``ingest.py``).
 """
 
 from __future__ import annotations
@@ -20,6 +21,13 @@ from . import cad
 from .joints import JointCandidate, infer_joints
 
 
+DEFAULT_RGBA = {
+    "aluminum": "0.72 0.74 0.78 1",
+    "steel": "0.30 0.31 0.34 1",
+    "pla": "0.95 0.45 0.15 1",
+}
+
+
 @dataclass
 class CollisionGeom:
     kind: str  # box | cylinder | sphere | mesh
@@ -34,13 +42,30 @@ class Link:
     name: str
     parts: list[cad.Part] = field(default_factory=list)
     origin: np.ndarray = field(default_factory=lambda: np.zeros(3))  # world, zero config
+    rotation: np.ndarray = field(default_factory=lambda: np.eye(3))  # world, zero config
     mass: float = 0.0
     com: np.ndarray = field(default_factory=lambda: np.zeros(3))  # link frame
     inertia: np.ndarray = field(default_factory=lambda: np.zeros((3, 3)))  # about COM
-    visuals: dict[str, trimesh.Trimesh] = field(default_factory=dict)  # material -> mesh (link frame)
+    visuals: dict[str, trimesh.Trimesh] = field(default_factory=dict)  # key -> mesh (link frame)
+    visual_materials: dict[str, str] = field(default_factory=dict)  # key -> material name (default: key)
     collisions: list[CollisionGeom] = field(default_factory=list)
+    source_collisions: list[CollisionGeom] = field(default_factory=list)  # from an input URDF
     collision_mode: str = ""
     collision_metrics: dict = field(default_factory=dict)
+
+    def pose(self) -> np.ndarray:
+        T = np.eye(4)
+        T[:3, :3], T[:3, 3] = self.rotation, self.origin
+        return T
+
+    def to_link(self, world_mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+        """Copy of a zero-configuration world-frame mesh, expressed in this link's frame."""
+        m = world_mesh.copy()
+        m.apply_transform(np.linalg.inv(self.pose()))
+        return m
+
+    def material(self, key: str) -> str:
+        return self.visual_materials.get(key, key)
 
     def mesh(self) -> trimesh.Trimesh:
         """All parts concatenated, link frame."""
@@ -53,8 +78,8 @@ class Joint:
     type: str
     parent: str
     child: str
-    origin: np.ndarray  # world, zero config
-    axis: np.ndarray  # unit, world == parent frame orientation
+    origin: np.ndarray  # world, zero config (== child link origin)
+    axis: np.ndarray  # unit, world frame at zero config
     lower: float = 0.0
     upper: float = 0.0
     effort: float = 0.0
@@ -75,6 +100,27 @@ class Robot:
     joints: dict[str, Joint]
     candidates: list[JointCandidate]
     root: str
+    materials: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_RGBA))  # name -> "r g b a"
+    floating_base: bool = False
+
+    def child_in_parent(self, j: "Joint") -> tuple[np.ndarray, np.ndarray]:
+        """(xyz, R) of the child link frame expressed in the parent link frame."""
+        p, c = self.links[j.parent], self.links[j.child]
+        return p.rotation.T @ (c.origin - p.origin), p.rotation.T @ c.rotation
+
+    def axis_local(self, j: "Joint") -> np.ndarray:
+        """Joint axis in the child link (== joint) frame, as URDF and MJCF want it."""
+        a = self.links[j.child].rotation.T @ j.axis
+        return np.where(np.abs(a) < 1e-9, 0.0, a)
+
+    def moving_joints(self) -> list["Joint"]:
+        """Non-fixed joints in depth-first link order (== MuJoCo qpos / SAPIEN active-joint order)."""
+        out = []
+        for n in self.ordered_links():
+            j = self.parent_joint(n)
+            if j is not None and j.type != "fixed":
+                out.append(j)
+        return out
 
     def parent_joint(self, link: str) -> Joint | None:
         return next((j for j in self.joints.values() if j.child == link), None)
@@ -131,6 +177,10 @@ def check_inertia(name: str, inertia: np.ndarray, mass: float) -> list[str]:
 def build(spec_path: Path) -> Robot:
     spec = yaml.safe_load(Path(spec_path).read_text())
     base = Path(spec_path).parent
+    if str(spec["source"]).lower().endswith(".urdf"):
+        from .ingest import build_from_urdf
+
+        return build_from_urdf(spec, base)
     scale = cad.UNIT_TO_M[spec.get("units", "mm")]
     tess = spec.get("visual", {}).get("tessellation", {})
 
@@ -200,9 +250,8 @@ def build(spec_path: Path) -> Robot:
             print("  WARNING", issue)
         by_mat: dict[str, list] = {}
         for p in link.parts:
-            m = p.mesh.copy()
-            m.apply_translation(-link.origin)
-            by_mat.setdefault(p.material, []).append(m)
+            by_mat.setdefault(p.material, []).append(link.to_link(p.mesh))
         link.visuals = {mat: trimesh.util.concatenate(ms) for mat, ms in by_mat.items()}
 
-    return Robot(spec["robot"], spec, links, joints, candidates, roots[0])
+    return Robot(spec["robot"], spec, links, joints, candidates, roots[0],
+                 floating_base=spec.get("base", "fixed") == "floating")

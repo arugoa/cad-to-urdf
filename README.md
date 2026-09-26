@@ -14,7 +14,22 @@ Turn feature-based / parametric CAD assemblies into **simulation-ready robot des
 
 ![arm4](docs/img/arm4_visual_vs_collision.png)
 
-## Quick start
+## Convert your robot (3 layers: CAD → format → simulator)
+
+```bash
+python -m cad2urdf.route --list                                          # the routing matrix
+python -m cad2urdf.route --cad onshape --format native --sim maniskill   # print the plan for a route
+python -m cad2urdf.route --cad onshape --format step --sim maniskill --run \
+    --input my_robot.step --out build/my_robot [--spec overrides.yaml]   # run it (deterministic)
+python -m cad2urdf.route --cad solidworks --format native --sim mujoco --run \
+    --input exported/robot.urdf --out build/robot                         # finish an exporter's URDF
+```
+
+The conversion is deterministic. The judgment calls (joint limits, materials and mimic couplings for STEP input, and running exporters inside the CAD tool) are handled by the **`cad2sim` skill** in `.agents/skills/cad2sim/`, which is symlinked into `.claude/skills/` so both Claude Code and Codex find it. See [`docs/RESEARCH.md` §9](docs/RESEARCH.md#9-routing-cad--format--simulator).
+
+If ROS is sourced in your shell, run with `env -u PYTHONPATH`: ROS's pytest plugins and packages leak into the venv.
+
+## Quick start (sample)
 
 ```bash
 python -m venv .venv && . .venv/bin/activate

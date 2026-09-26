@@ -4,12 +4,15 @@ Modes (cheapest -> most faithful), selected per link in the spec:
 
 none        nothing
 box         one oriented bounding box around the whole link
+auto        per part: primitive if it fills >= 80 %, hull if small or nearly
+            convex, else CoACD on that part (the router's default)
 primitives  one box/cylinder/sphere per *part* (tightest bounding primitive),
             tiny parts culled; falls back to that part's convex hull when no
             primitive fills it well
 hull        one convex hull of the whole link, vertex-capped
 decompose   CoACD approximate convex decomposition of the whole link
 mesh        the raw visual mesh (most engines silently convexify it -> avoid)
+keep        the collision elements already present in an input URDF
 
 Every convex piece is capped at ``max_hull_vertices`` (PhysX GPU cooking
 limit is 64; MuJoCo and Bullet accept more but gain nothing from it).
@@ -17,7 +20,6 @@ limit is 64; MuJoCo and Bullet accept more but gain nothing from it).
 
 from __future__ import annotations
 
-import coacd
 import numpy as np
 import trimesh
 
@@ -85,8 +87,10 @@ def link_collisions(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
     mode = cfg.get("mode", "hull")
     link.collision_mode = mode
     whole = link.mesh()
-    if mode == "none":
+    if mode == "none" or (mode != "keep" and not link.visuals):
         return []
+    if mode == "keep":  # the input URDF's own collision elements, unchanged
+        return list(link.source_collisions)
     if mode == "mesh":
         return [CollisionGeom("mesh", np.eye(4), mesh=whole, source="raw")]
     if mode == "box":
@@ -103,8 +107,7 @@ def link_collisions(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
         for p in link.parts:
             if p.volume < min_frac * total:
                 continue  # culled: bolts, pins, small brackets
-            m = p.mesh.copy()
-            m.apply_translation(-link.origin)
+            m = link.to_link(p.mesh)
             g, fill = _best_primitive(m)
             if fill >= min_fill:
                 g.source = f"{p.name} ({g.kind}, fill {fill:.2f})"
@@ -112,23 +115,59 @@ def link_collisions(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
             else:
                 out.append(_hull_geom(m, max_v, f"{p.name} (hull, primitive fill {fill:.2f})"))
         return out
+    if mode == "auto":
+        from_urdf = all(p.shape is None for p in link.parts)
+        if from_urdf and link.mass <= 0:
+            return []  # massless link from an input URDF: a frame or decoration (stickers, lightbars)
+        return _auto(link, cfg, max_v)
     if mode == "decompose":
-        cm = coacd.Mesh(whole.vertices, whole.faces)
-        parts = coacd.run_coacd(
-            cm,
-            threshold=cfg.get("threshold", 0.05),
-            max_convex_hull=cfg.get("max_hulls", -1),
-            max_ch_vertex=max_v,
-            decimate=True,
-            preprocess_mode="auto",
-            seed=0,
-        )
-        out = []
-        for i, (v, f) in enumerate(parts):
-            piece = trimesh.Trimesh(v, f).convex_hull
-            out.append(CollisionGeom("mesh", np.eye(4), mesh=_cap_vertices(piece, max_v), source=f"coacd-{i}"))
-        return out
+        return _coacd(whole, cfg, max_v, "coacd")
     raise ValueError(f"unknown collision mode {mode!r}")
+
+
+def _auto(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
+    """Per part: primitive if it fills well, else a hull if the part is small, else CoACD on that part.
+
+    Deterministic (CoACD seed 0). Works for STEP parts and for an exporter URDF's per-visual parts.
+    """
+    total = sum(p.volume for p in link.parts) or 1.0
+    min_frac = cfg.get("min_part_fraction", 0.02)
+    min_fill = cfg.get("min_fill", 0.8)
+    out = []
+    for p in link.parts:
+        if p.volume < min_frac * total:
+            continue
+        m = link.to_link(p.mesh)
+        g, fill = _best_primitive(m)
+        if fill >= min_fill:
+            g.source = f"{p.name} ({g.kind}, fill {fill:.2f})"
+            out.append(g)
+            continue
+        hull = m.convex_hull
+        if p.volume < 0.1 * total or (m.is_watertight and m.volume / max(hull.volume, 1e-12) > 0.85):
+            out.append(_hull_geom(m, max_v, f"{p.name} (hull)"))
+            continue
+        out += _coacd(m, {"threshold": cfg.get("threshold", 0.05), "max_hulls": cfg.get("max_hulls", 8)},
+                      max_v, f"{p.name} coacd")
+    return out
+
+
+def _coacd(mesh: trimesh.Trimesh, cfg: dict, max_v: int, tag: str) -> list[CollisionGeom]:
+    # Imported lazily: loading coacd's native library before OpenCascade (build123d) makes
+    # import_step segfault in the same process.
+    import coacd
+
+    parts = coacd.run_coacd(
+        coacd.Mesh(mesh.vertices, mesh.faces),
+        threshold=cfg.get("threshold", 0.05),
+        max_convex_hull=cfg.get("max_hulls", -1),
+        max_ch_vertex=max_v,
+        decimate=True,
+        preprocess_mode="auto",
+        seed=0,
+    )
+    return [CollisionGeom("mesh", np.eye(4), mesh=_cap_vertices(trimesh.Trimesh(v, f).convex_hull, max_v),
+                          source=f"{tag}-{i}") for i, (v, f) in enumerate(parts)]
 
 
 def geom_to_mesh(g: CollisionGeom) -> trimesh.Trimesh:
@@ -146,11 +185,7 @@ def geom_to_mesh(g: CollisionGeom) -> trimesh.Trimesh:
 def metrics(link: Link, n: int = 60000, seed: int = 0) -> dict:
     """Volumetric agreement between the exact parts and the collision set (Monte Carlo)."""
     rng = np.random.default_rng(seed)
-    part_meshes = []
-    for p in link.parts:
-        m = p.mesh.copy()
-        m.apply_translation(-link.origin)
-        part_meshes.append(m)
+    part_meshes = [link.to_link(p.mesh) for p in link.parts]
     coll = [geom_to_mesh(g) for g in link.collisions]
     all_bounds = np.array([m.bounds for m in part_meshes + coll])
     lo, hi = all_bounds[:, 0].min(0), all_bounds[:, 1].max(0)
@@ -179,5 +214,5 @@ def build_collisions(robot: Robot, with_metrics: bool = True) -> None:
     max_v = spec.get("max_hull_vertices", 64)
     for link in robot.links.values():
         link.collisions = link_collisions(link, _per(spec, link.name), max_v)
-        if with_metrics and link.collisions:
+        if with_metrics and link.collisions and link.parts:
             link.collision_metrics = metrics(link)

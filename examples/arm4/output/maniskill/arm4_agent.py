@@ -24,6 +24,8 @@ class Arm4(BaseAgent):
     keyframes = dict(
         home=Keyframe(qpos=np.array([0, 0, 0, 0, 0, 0]), pose=sapien.Pose()),
         ready=Keyframe(qpos=np.array([0, 0.6, 1.2, 0, 0, 0]), pose=sapien.Pose()),
+        open=Keyframe(qpos=np.array([0, 0, 0, 0, 0.008, 0.008]), pose=sapien.Pose()),
+        closed=Keyframe(qpos=np.array([0, 0, 0, 0, -0.006, -0.006]), pose=sapien.Pose()),
     )
 
     @property
@@ -41,7 +43,7 @@ class Arm4(BaseAgent):
             lower=-0.006, upper=0.008,
             stiffness=500.0, damping=20.0,
             force_limit=20,
-            mimic={'finger_right': {'joint': 'finger_left'}},
-            normalize_action=False,
+            mimic={'finger_right': {'joint': 'finger_left', 'multiplier': 1.0, 'offset': 0.0}},
+            normalize_action=False,  # targets in joint units (rad / m), not [-1, 1]
         )
         return dict(pd_joint_pos=dict(arm=arm, gripper=gripper))

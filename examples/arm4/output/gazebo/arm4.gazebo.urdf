@@ -95,9 +95,9 @@
   </link>
   <link name="upper_arm">
     <inertial>
-      <origin xyz="0 -0.0123615 0.153138" rpy="0 0 0" />
-      <mass value="1.07731" />
-      <inertia ixx="0.0116084" ixy="3.53937e-18" ixz="-1.56489e-17" iyy="0.0111736" iyz="0.00128993" izz="0.000710891" />
+      <origin xyz="0 0 0.116984" rpy="0 0 0" />
+      <mass value="0.77782" />
+      <inertia ixx="0.00724199" ixy="4.01093e-18" ixz="-1.7043e-17" iyy="0.00723782" iyz="8.70378e-19" izz="0.000221003" />
     </inertial>
     <visual name="upper_arm_aluminum">
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -191,30 +191,12 @@
         <mesh filename="package://arm4_description/meshes/collision/upper_arm_12.stl" />
       </geometry>
     </collision>
-    <collision name="upper_arm_collision_13">
-      <origin xyz="0 0 0" rpy="0 0 0" />
-      <geometry>
-        <mesh filename="package://arm4_description/meshes/collision/upper_arm_13.stl" />
-      </geometry>
-    </collision>
-    <collision name="upper_arm_collision_14">
-      <origin xyz="0 0 0" rpy="0 0 0" />
-      <geometry>
-        <mesh filename="package://arm4_description/meshes/collision/upper_arm_14.stl" />
-      </geometry>
-    </collision>
-    <collision name="upper_arm_collision_15">
-      <origin xyz="0 0 0" rpy="0 0 0" />
-      <geometry>
-        <mesh filename="package://arm4_description/meshes/collision/upper_arm_15.stl" />
-      </geometry>
-    </collision>
   </link>
   <link name="forearm">
     <inertial>
-      <origin xyz="0 0 0.124181" rpy="0 0 0" />
-      <mass value="0.350529" />
-      <inertia ixx="0.00250967" ixy="7.67433e-22" ixz="-7.03487e-19" iyy="0.00238184" iyz="8.7229e-21" izz="0.000176919" />
+      <origin xyz="0 -0.0192266 0.0673338" rpy="0 0 0" />
+      <mass value="0.646467" />
+      <inertia ixx="0.00531903" ixy="1.81833e-19" ixz="-1.5934e-19" iyy="0.00491554" iyz="-0.000836919" izz="0.000511767" />
     </inertial>
     <visual name="forearm_aluminum">
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -252,6 +234,12 @@
       <origin xyz="0 0 0" rpy="-1.5708 -1.5708 0" />
       <geometry>
         <cylinder radius="0.005" length="0.054" />
+      </geometry>
+    </collision>
+    <collision name="forearm_collision_4">
+      <origin xyz="0 -0.042 0" rpy="-1.5708 1.5708 0" />
+      <geometry>
+        <cylinder radius="0.02" length="0.03" />
       </geometry>
     </collision>
   </link>

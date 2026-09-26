@@ -1,15 +1,22 @@
 """Load the generated files in every simulator available locally and check what each one reads.
 
-    python -m cad2urdf.validate examples/arm4/output
+    python -m cad2urdf.validate OUTDIR [--sims mujoco,pybullet,sapien,maniskill,yourdfpy]
 
-Checks: MuJoCo (raw URDF, URDF + <mujoco> block, native MJCF), PyBullet,
-SAPIEN (the ManiSkill backend) and yourdfpy (a ROS-free URDF parser).
-Isaac Sim/Lab and Gazebo need GPUs / ROS installs and are not exercised here.
+Robot-agnostic: every check drives the actuated joints to the same modest test
+pose (from 0 by min(0.4 rad | 2 cm, 30 % of the range), 0.4 rad for continuous
+joints, mimic joints following their leader) and reports tracking error, stability and mimic error.
+
+Checks: MuJoCo (URDF import and native MJCF), PyBullet, SAPIEN, ManiSkill 3
+(through the generated agent, GPU if available) and yourdfpy.
+Isaac Sim/Lab and Gazebo are not exercised here.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
+import shutil
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -17,33 +24,95 @@ from pathlib import Path
 import numpy as np
 
 
-def _urdf_info(urdf: Path):
-    root = ET.parse(urdf).getroot()
-    masses = {l.get("name"): float(l.find("inertial/mass").get("value")) for l in root.findall("link")}
-    joints = {j.get("name"): j for j in root.findall("joint")}
-    return root, masses, joints
+# ---------------------------------------------------------------- URDF helpers
+def _urdf_joints(urdf: Path) -> list[dict]:
+    out = []
+    for j in ET.parse(urdf).getroot().findall("joint"):
+        lim, mim = j.find("limit"), j.find("mimic")
+        out.append(dict(
+            name=j.get("name"), type=j.get("type"),
+            lower=float(lim.get("lower", 0)) if lim is not None else 0.0,
+            upper=float(lim.get("upper", 0)) if lim is not None else 0.0,
+            mimic=None if mim is None else (mim.get("joint"), float(mim.get("multiplier", 1)), float(mim.get("offset", 0))),
+        ))
+    return out
 
 
+def test_pose(urdf: Path) -> dict[str, float]:
+    """Target for every non-fixed joint (mimic followers included)."""
+    q = {}
+    joints = [j for j in _urdf_joints(urdf) if j["type"] != "fixed"]
+    for j in joints:
+        if j["mimic"] is None:
+            if j["type"] == "continuous":
+                q[j["name"]] = 0.4
+                continue
+            lo, hi = j["lower"], j["upper"]
+            mid = 0.0 if lo <= 0.0 <= hi else (lo + hi) / 2
+            step = min(0.4 if j["type"] == "revolute" else 0.02, 0.3 * (hi - lo))
+            q[j["name"]] = float(np.clip(mid + step, lo, hi))
+    for j in joints:
+        if j["mimic"]:
+            lead, mult, off = j["mimic"]
+            q[j["name"]] = q.get(lead, 0.0) * mult + off
+    return q
+
+
+def _mimics(urdf: Path):
+    return [(j["name"], *j["mimic"]) for j in _urdf_joints(urdf) if j["mimic"]]
+
+
+def _mimic_err(q: dict[str, float], urdf: Path) -> float:
+    errs = [abs(q[f] - (q[l] * m + o)) for f, l, m, o in _mimics(urdf) if f in q and l in q]
+    return round(float(max(errs)), 5) if errs else 0.0
+
+
+def _masses(urdf: Path) -> dict[str, float]:
+    out = {}
+    for l in ET.parse(urdf).getroot().findall("link"):
+        m = l.find("inertial/mass")
+        out[l.get("name")] = float(m.get("value")) if m is not None else 0.0
+    return out
+
+
+def _fixed_base(out_dir: Path, urdf: Path) -> bool:
+    srdf = urdf.with_suffix(".srdf")
+    if srdf.exists():
+        vj = ET.parse(srdf).getroot().find("virtual_joint")
+        if vj is not None:
+            return vj.get("type") != "floating"
+    return True
+
+
+def _summary(q: dict[str, float], target: dict[str, float], urdf: Path) -> dict:
+    leaders = [n for n in target if n not in {f for f, *_ in _mimics(urdf)}]
+    missing = [n for n in leaders if n not in q]
+    err = max((abs(q[n] - target[n]) for n in leaders if n in q), default=float("nan"))
+    return {"joints_checked": len(leaders) - len(missing), **({"joints_missing": missing} if missing else {}),
+            "tracking_err_max": round(float(err), 4), "mimic_err_max": _mimic_err(q, urdf),
+            "finite": bool(np.all(np.isfinite(list(q.values()))))}
+
+
+# ---------------------------------------------------------------- checks
 def check_yourdfpy(urdf: Path) -> dict:
     import yourdfpy
 
     r = yourdfpy.URDF.load(str(urdf), build_scene_graph=True, load_meshes=True, load_collision_meshes=True)
-    cfg = {n: 0.0 for n in r.actuated_joint_names}
-    r.update_cfg(cfg)
-    T = r.get_transform("gripper_base", "base_link")
-    return {"ok": True, "links": len(r.link_map), "actuated_joints": r.actuated_joint_names,
-            "gripper_base_z_at_home": round(float(T[2, 3]), 4)}
+    r.update_cfg({n: 0.0 for n in r.actuated_joint_names})
+    T = [r.get_transform(l) for l in r.link_map]
+    return {"ok": True, "links": len(r.link_map), "actuated_joints": len(r.actuated_joint_names),
+            "fk_finite": bool(np.all(np.isfinite(T)))}
 
 
 def check_mujoco_urdf(urdf: Path) -> dict:
-    """What MuJoCo's URDF importer does with a plain, neutral URDF."""
+    """What MuJoCo's own URDF importer does with the neutral URDF."""
     import mujoco
 
     out = {}
     try:
         mujoco.MjModel.from_xml_path(str(urdf))
         out["raw_urdf"] = "loaded"
-    except Exception as e:  # expected: meshes not found because strippath drops 'meshes/visual/'
+    except Exception as e:
         out["raw_urdf"] = f"FAILED: {str(e).splitlines()[0][:160]}"
 
     def with_block(**compiler):
@@ -58,21 +127,14 @@ def check_mujoco_urdf(urdf: Path) -> dict:
         finally:
             path.unlink()
 
-    m_default = with_block(strippath="false")
-    m_keep = with_block(strippath="false", discardvisual="false", fusestatic="false")
-    _, masses, _ = _urdf_info(urdf)
-    out["with_strippath_false"] = {
-        "ngeom": m_default.ngeom, "nbody": m_default.nbody, "neq (mimic->equality?)": m_default.neq,
-        "nu (actuators)": m_default.nu,
-        "dof_damping": np.round(m_default.dof_damping, 4).tolist(),
-        "dof_frictionloss": np.round(m_default.dof_frictionloss, 4).tolist(),
-        "dof_armature": np.round(m_default.dof_armature, 4).tolist(),
-    }
-    out["with_discardvisual_false"] = {"ngeom": m_keep.ngeom}
-    # a fixed-base root link is fused into the world body (fusestatic), so compare moving links only
-    moving = sum(v for k, v in masses.items() if k != ET.parse(urdf).getroot().find("link").get("name"))
-    out["moving_mass_match"] = bool(np.isclose(sum(m_default.body_mass[1:]), moving, rtol=1e-4))
-    out["root_link_fused_into_world"] = bool(m_default.nbody == len(masses))
+    try:
+        m = with_block(strippath="false")
+        m_keep = with_block(strippath="false", discardvisual="false", fusestatic="false")
+        out["import"] = {"ngeom": m.ngeom, "ngeom_with_visuals": m_keep.ngeom, "nbody": m.nbody,
+                         "neq (mimic->equality)": m.neq, "nu (actuators)": m.nu,
+                         "armature_all_zero": bool(np.all(m.dof_armature == 0))}
+    except Exception as e:
+        out["import"] = f"FAILED: {str(e).splitlines()[0][:200]}"
     gz = urdf.parent / "gazebo" / f"{urdf.stem}.gazebo.urdf"
     if gz.exists():
         try:
@@ -83,151 +145,184 @@ def check_mujoco_urdf(urdf: Path) -> dict:
     return out
 
 
-def check_mujoco_mjcf(xml: Path) -> dict:
+def check_mujoco_mjcf(xml: Path, urdf: Path) -> dict:
     import mujoco
 
     m = mujoco.MjModel.from_xml_path(str(xml))
     d = mujoco.MjData(m)
-    names = lambda obj, n: [mujoco.mj_id2name(m, obj, i) for i in range(n)]
-    bodies = names(mujoco.mjtObj.mjOBJ_BODY, m.nbody)
-
-    # 1. initial penetration at home between non-excluded bodies
-    mujoco.mj_resetDataKeyframe(m, d, 0)
+    bodies = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, i) for i in range(m.nbody)]
     mujoco.mj_forward(m, d)
     pen = sorted({tuple(sorted((bodies[m.geom_bodyid[c.geom1]], bodies[m.geom_bodyid[c.geom2]])))
-                  for c in d.contact[: d.ncon] if c.dist < -1e-4})
-
-    # 2. track the "ready" keyframe with the position servos for 3 s
-    k_ready = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_KEY, "ready")
-    target = m.key_qpos[k_ready].copy()
-    d.ctrl[:] = m.key_ctrl[k_ready]
-    finger_l = m.jnt_qposadr[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "finger_left")]
-    finger_r = m.jnt_qposadr[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "finger_right")]
-    ok = True
+                  for c in d.contact[: d.ncon] if c.dist < -1e-4 and "world" not in
+                  (bodies[m.geom_bodyid[c.geom1]], bodies[m.geom_bodyid[c.geom2]])})
+    target = test_pose(urdf)
+    act = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i) for i in range(m.nu)]
+    for i, name in enumerate(act):
+        jid = m.actuator_trnid[i, 0]
+        d.ctrl[i] = target.get(mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, jid), 0.0)
     for _ in range(int(3.0 / m.opt.timestep)):
         mujoco.mj_step(m, d)
-        if not np.all(np.isfinite(d.qpos)):
-            ok = False
-            break
-    err = np.abs(d.qpos - target)
-    # 3. open the gripper and check the equality constraint keeps the fingers symmetric
-    i_f = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i) for i in range(m.nu)].index("finger_left")
-    d.ctrl[i_f] = 0.008
-    for _ in range(int(1.0 / m.opt.timestep)):
-        mujoco.mj_step(m, d)
-    return {
-        "nbody": m.nbody, "ngeom": m.ngeom, "nu": m.nu, "neq": m.neq, "nkey": m.nkey,
-        "penetrating_pairs_at_home": pen,
-        "stable": ok,
-        "ready_tracking_err_rad_max": round(float(err[:4].max()), 4),
-        "gravity_sag_note": "position servos with finite kp settle with a small steady-state error under gravity",
-        "fingers_after_open": [round(float(d.qpos[finger_l]), 5), round(float(d.qpos[finger_r]), 5)],
-    }
+    q = {}
+    for jid in range(m.njnt):
+        if int(m.jnt_type[jid]) in (int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)):
+            q[mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, jid)] = float(d.qpos[m.jnt_qposadr[jid]])
+    unactuated = sorted(set(target) - {mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, m.actuator_trnid[i, 0])
+                                       for i in range(m.nu)} - {f for f, *_ in _mimics(urdf)})
+    tgt = {k: v for k, v in target.items() if k not in unactuated}
+    return {"nbody": m.nbody, "ngeom": m.ngeom, "nu": m.nu, "neq": m.neq, "nkey": m.nkey,
+            "penetrating_pairs_at_zero": pen, "unactuated_joints": unactuated, **_summary(q, tgt, urdf)}
 
 
-def check_pybullet(urdf: Path) -> dict:
+def check_pybullet(urdf: Path, fixed: bool) -> dict:
     import pybullet as p
 
     cid = p.connect(p.DIRECT)
     p.setGravity(0, 0, -9.81)
-    root = ET.parse(urdf).getroot()
     res = {}
-    for label, flags in [("default_flags", 0), ("USE_INERTIA_FROM_FILE", p.URDF_USE_INERTIA_FROM_FILE)]:
-        rid = p.loadURDF(str(urdf), useFixedBase=True, flags=flags)
-        link_names = {p.getJointInfo(rid, i)[12].decode(): i for i in range(p.getNumJoints(rid))}
-        izz = {n: p.getDynamicsInfo(rid, i)[2] for n, i in link_names.items()}
-        # compare principal moments (pybullet stores the diagonalised inertia)
-        rel = [abs(max(izz[n]) - max(np.linalg.eigvalsh(_inertia(root, n)))) / max(np.linalg.eigvalsh(_inertia(root, n)))
-               for n in link_names]
-        res[label] = {"max_rel_inertia_error": round(float(max(rel)), 3)}
-        p.removeBody(rid)
-
-    flags = p.URDF_USE_INERTIA_FROM_FILE | p.URDF_USE_SELF_COLLISION | p.URDF_USE_SELF_COLLISION_EXCLUDE_PARENT
-    rid = p.loadURDF(str(urdf), useFixedBase=True, flags=flags)
+    rid = p.loadURDF(str(urdf), useFixedBase=fixed)
     n = p.getNumJoints(rid)
+    def_I = [p.getDynamicsInfo(rid, i)[2] for i in range(n)]
+    p.removeBody(rid)
+    flags = p.URDF_USE_INERTIA_FROM_FILE | p.URDF_USE_SELF_COLLISION | p.URDF_USE_SELF_COLLISION_EXCLUDE_PARENT
+    rid = p.loadURDF(str(urdf), useFixedBase=fixed, flags=flags)
+    file_I = [p.getDynamicsInfo(rid, i)[2] for i in range(n)]
+    rel = [abs(max(a) - max(b)) / max(max(b), 1e-12) for a, b in zip(def_I, file_I) if max(b) > 0]
+    res["inertia_err_without_USE_INERTIA_FROM_FILE"] = round(float(max(rel, default=0)), 3)
     info = [p.getJointInfo(rid, i) for i in range(n)]
-    res["joint_damping_friction_read"] = {i[1].decode(): (round(i[6], 3), round(i[7], 3)) for i in info}
-    p.performCollisionDetection()
-    pairs = sorted({tuple(sorted((info[c[3]][12].decode() if c[3] >= 0 else "base_link",
-                                  info[c[4]][12].decode() if c[4] >= 0 else "base_link")))
-                    for c in p.getContactPoints(rid, rid) if c[8] < -1e-4})
-    res["self_collision_pairs_at_home (parent pairs excluded by flag)"] = pairs
-    # mimic is NOT enforced by pybullet: emulate with a gear constraint
     idx = {i[1].decode(): i[0] for i in info}
-    c = p.createConstraint(rid, idx["finger_left"], rid, idx["finger_right"], p.JOINT_GEAR, [0, 1, 0], [0, 0, 0], [0, 0, 0])
-    p.changeConstraint(c, gearRatio=-1, maxForce=100)
-    targets = {"shoulder_pitch": 0.6, "elbow": 1.2, "finger_left": 0.008}
+    lname = {i[0]: i[12].decode() for i in info}
+    p.performCollisionDetection()
+    res["self_contacts_at_zero"] = sorted({tuple(sorted((lname.get(c[3], "base"), lname.get(c[4], "base"))))
+                                           for c in p.getContactPoints(rid, rid) if c[8] < -1e-4})
+    followers = set()
+    for f, l, mult, off in _mimics(urdf):  # pybullet ignores <mimic>: emulate with gear constraints
+        c = p.createConstraint(rid, idx[l], rid, idx[f], p.JOINT_GEAR, [0, 0, 1], [0, 0, 0], [0, 0, 0])
+        p.changeConstraint(c, gearRatio=-mult, maxForce=1000)
+        followers.add(f)
+    target = test_pose(urdf)
     for name, j in idx.items():
-        if info[j][2] != p.JOINT_FIXED and name != "finger_right":
-            p.setJointMotorControl2(rid, j, p.POSITION_CONTROL, targetPosition=targets.get(name, 0.0),
-                                    force=float(info[j][10]))
-    p.setJointMotorControl2(rid, idx["finger_right"], p.VELOCITY_CONTROL, force=0)  # free, follows the gear
+        if info[j][2] == p.JOINT_FIXED:
+            continue
+        if name in followers:
+            p.setJointMotorControl2(rid, j, p.VELOCITY_CONTROL, force=0)
+        else:
+            p.setJointMotorControl2(rid, j, p.POSITION_CONTROL, targetPosition=target.get(name, 0.0),
+                                    force=float(info[j][10]) or 1000.0)
     for _ in range(240 * 3):
         p.stepSimulation()
-    q = {name: p.getJointState(rid, j)[0] for name, j in idx.items()}
-    res["after_3s"] = {k: round(v, 4) for k, v in q.items()}
+    q = {name: p.getJointState(rid, j)[0] for name, j in idx.items() if info[j][2] != p.JOINT_FIXED}
     p.disconnect(cid)
-    return res
+    return {**res, **_summary(q, target, urdf)}
 
 
-def _inertia(root, link):
-    el = root.find(f"link[@name='{link}']/inertial/inertia")
-    g = lambda k: float(el.get(k))
-    return np.array([[g("ixx"), g("ixy"), g("ixz")], [g("ixy"), g("iyy"), g("iyz")], [g("ixz"), g("iyz"), g("izz")]])
+def check_sapien(urdf: Path, fixed: bool) -> dict:
+    import sapien  # noqa: I001 (import before mujoco/pybullet in a fresh process is safest)
 
-
-def check_sapien(urdf: Path) -> dict:
-    import shutil
-
-    import sapien
-
-    # headless: SAPIEN needs a GPU render device for visual shapes, so load a visual-free copy
     root = ET.parse(urdf).getroot()
-    for link in root.findall("link"):
+    for link in root.findall("link"):  # headless CPU check: no render device needed without visuals
         for v in link.findall("visual"):
             link.remove(v)
     tmp = urdf.parent / "_sapien_probe.urdf"
     ET.ElementTree(root).write(tmp)
-    shutil.copy(urdf.with_suffix(".srdf"), tmp.with_suffix(".srdf"))
+    if urdf.with_suffix(".srdf").exists():
+        shutil.copy(urdf.with_suffix(".srdf"), tmp.with_suffix(".srdf"))
     try:
         scene = sapien.Scene([sapien.physx.PhysxCpuSystem()])
         scene.set_timestep(1 / 500)
         loader = scene.create_urdf_loader()
-        loader.fix_root_link = True
-        robot = loader.load(str(tmp))  # also reads <same name>.srdf
+        loader.fix_root_link = fixed
+        robot = loader.load(str(tmp))
     finally:
         tmp.unlink()
-        tmp.with_suffix(".srdf").unlink()
-    ignored = [sorted(p) for p in loader.ignore_pairs]
-    joints = robot.get_active_joints()
-    targets = {"shoulder_pitch": 0.6, "elbow": 1.2}
-    for j in joints:
-        j.set_drive_properties(stiffness=200.0, damping=10.0, force_limit=40.0)
-        j.set_drive_target(targets.get(j.name, 0.0))
+        tmp.with_suffix(".srdf").unlink(missing_ok=True)
+    target = test_pose(urdf)
+    for j in robot.get_active_joints():
+        j.set_drive_properties(stiffness=1000.0, damping=50.0, force_limit=1e4)
+        j.set_drive_target(target.get(j.name, 0.0))
     for _ in range(1500):
         robot.set_qf(robot.compute_passive_force(gravity=True))
         scene.step()
-    q = dict(zip([j.name for j in joints], np.round(robot.get_qpos(), 4).tolist()))
-    total_mass = sum(l.mass for l in robot.get_links())
-    return {"active_joints": [j.name for j in joints],
-            "srdf_pairs_applied (only reason=Default is honoured)": ignored,
-            "total_mass": round(float(total_mass), 4), "qpos_after_3s": q,
-            "mimic_note": "finger_right is an independent active joint in SAPIEN; ManiSkill uses a mimic controller"}
+    q = dict(zip([j.name for j in robot.get_active_joints()], robot.get_qpos().tolist()))
+    s = _summary(q, target, urdf)
+    s["mimic_err_max"] = "n/a (SAPIEN treats mimic joints as independent; ManiSkill uses a mimic controller)"
+    return {"srdf_pairs_applied (reason=Default only)": [sorted(p) for p in loader.ignore_pairs],
+            "total_mass": round(float(sum(l.mass for l in robot.get_links())), 4), **s}
 
 
-def main(out_dir: str):
-    out = Path(out_dir)
-    urdf = next(out.glob("*.urdf"))
-    results = {}
-    for name, fn, arg in [
-        ("yourdfpy", check_yourdfpy, urdf),
-        ("mujoco_urdf_import", check_mujoco_urdf, urdf),
-        ("mujoco_mjcf", check_mujoco_mjcf, out / "mjcf" / f"{urdf.stem}.xml"),
-        ("pybullet", check_pybullet, urdf),
-        ("sapien_maniskill", check_sapien, urdf),
-    ]:
+MANISKILL_PROBE = r"""
+import importlib.util, json, sys, torch, gymnasium as gym
+spec = importlib.util.spec_from_file_location("agent", sys.argv[1]); m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+import mani_skill.envs
+target = json.loads(sys.argv[3])
+backend = sys.argv[2]
+n = 64 if backend == "physx_cuda" else 1
+cls = next(v for v in vars(m).values() if isinstance(v, type) and hasattr(v, "uid") and v.__module__ == "agent")
+env = gym.make("Empty-v1", robot_uids=cls.uid, num_envs=n, sim_backend=backend, control_mode="pd_joint_pos")
+env.reset(seed=0)
+agent = env.unwrapped.agent
+act = []
+for name, c in agent.controller.controllers.items():
+    mimic = getattr(c.config, "mimic", {}) or {}
+    act += [target.get(j, 0.0) for j in c.config.joint_names if j not in mimic]
+a = torch.tensor(act, dtype=torch.float32).repeat(n, 1)
+for _ in range(150):
+    env.step(a)
+q = agent.robot.get_qpos()
+names = [j.name for j in agent.robot.active_joints]
+print(json.dumps({"backend": backend, "num_envs": n, "action_dim": len(act),
+                  "q": dict(zip(names, q[0].cpu().tolist())),
+                  "spread_across_envs": float((q.max(0).values - q.min(0).values).max())}))
+"""
+
+
+def check_maniskill(out: Path, urdf: Path) -> dict:
+    agent = next((out / "maniskill").glob("*_agent.py"), None)
+    if agent is None:
+        return {"ok": False, "error": "no maniskill/*_agent.py"}
+    target = test_pose(urdf)
+    res = {}
+    import os
+
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    for backend in ("physx_cpu", "physx_cuda"):
+        r = subprocess.run([sys.executable, "-c", MANISKILL_PROBE, str(agent), backend, json.dumps(target)],
+                           capture_output=True, text=True, env=env, timeout=900)
+        lines = [l for l in r.stdout.splitlines() if l.startswith("{")]
+        if r.returncode or not lines:
+            res[backend] = {"ok": False, "error": (r.stderr.strip().splitlines() or ["?"])[-1][:300]}
+            continue
+        d = json.loads(lines[-1])
+        res[backend] = {"num_envs": d["num_envs"], "action_dim": d["action_dim"],
+                        "spread_across_envs": round(d["spread_across_envs"], 6), **_summary(d["q"], target, urdf)}
+    return res
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("out", nargs="?", default="examples/arm4/output")
+    ap.add_argument("--sims", default="yourdfpy,mujoco,pybullet,sapien,maniskill")
+    args = ap.parse_args(argv)
+    out = Path(args.out)
+    urdf = next(p for p in out.glob("*.urdf") if not p.name.startswith("_"))
+    fixed = _fixed_base(out, urdf)
+    sims = args.sims.split(",")
+    checks = []
+    if "yourdfpy" in sims:
+        checks.append(("yourdfpy", lambda: check_yourdfpy(urdf)))
+    if "mujoco" in sims:
+        checks += [("mujoco_urdf_import", lambda: check_mujoco_urdf(urdf)),
+                   ("mujoco_mjcf", lambda: check_mujoco_mjcf(out / "mjcf" / f"{urdf.stem}.xml", urdf))]
+    if "pybullet" in sims:
+        checks.append(("pybullet", lambda: check_pybullet(urdf, fixed)))
+    if "sapien" in sims:
+        checks.append(("sapien", lambda: check_sapien(urdf, fixed)))
+    if "maniskill" in sims:
+        checks.append(("maniskill", lambda: check_maniskill(out, urdf)))
+    results = {"test_pose": test_pose(urdf)}
+    for name, fn in checks:
         try:
-            results[name] = fn(arg)
+            results[name] = fn()
         except Exception as e:
             results[name] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
         print(f"== {name}\n{json.dumps(results[name], indent=2)}")
@@ -236,4 +331,4 @@ def main(out_dir: str):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "examples/arm4/output")
+    main()
