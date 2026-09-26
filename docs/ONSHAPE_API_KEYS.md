@@ -2,10 +2,21 @@
 
 The router reads your real Onshape mates through the Onshape REST API, using cad2urdf's own client (`cad2urdf/onshape.py`). That needs an API key pair.
 
-1. Sign in to Onshape with your team account, then open **https://dev-portal.onshape.com/keys**. You can also get there from Onshape: profile icon (top right) → **Developer portal** → **API keys**.
-2. Click **Create new API key**. Tick the read permissions only: *read your profile information* and *read your documents*.
-   - Enterprise accounts (e.g. `tritonrobotics.onshape.com`): if the option isn't there, an Enterprise admin has to allow API keys for the domain.
+API keys are managed in your Onshape **settings** (the old "Developer portal" link no longer shows them). Where depends on your account type:
+
+1. **Personal / free / education account:** user icon (top right) → **My account** → **Developer** → **API keys** → **Create new API key**. Tick read permissions only.
+2. **Company or Enterprise account** (e.g. `tritonrobotics.onshape.com`): **only an admin can create keys** for Enterprise documents. Ask an admin to do:
+   - user icon → **Company/Enterprise settings** → **Developer** → **API keys** tab → **Create new API key**;
+   - assign the key to you, with read permissions;
+   - send you both values privately.
+
+   The *My account → Developer* page only manages keys not tied to the company; those may not be able to read Enterprise documents.
 3. Copy the **access key** and the **secret key**. The secret is shown only once.
+
+   Sources: [My Account – Developer](https://cad.onshape.com/help/Content/Plans/my_account_developer.htm), [Company/Classroom/Enterprise Settings – Developer](https://cad.onshape.com/help/Content/Plans/enterprise_settings_developer.htm).
+
+**No admin available?** Use Onshape's URDF export instead (no keys needed; see the end of this page).
+
 4. Put them in your shell. Never commit them or paste them into chat:
 
    ```bash
