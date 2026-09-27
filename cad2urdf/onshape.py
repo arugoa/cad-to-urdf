@@ -66,10 +66,24 @@ def parse_quantity(expr: str | None, default: float | None = None) -> float | No
     return float(m.group(1)) * UNIT.get(m.group(2).lower(), 1.0) if m.group(2) else float(m.group(1))
 
 
+def load_dotenv(path: Path | None = None) -> None:
+    """Read KEY=VALUE lines from the repo's untracked .env into os.environ (existing vars win)."""
+    path = path or Path(__file__).resolve().parents[1] / ".env"
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.removeprefix("export ").split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
 class Client:
     """Minimal Onshape REST client with an on-disk response cache."""
 
     def __init__(self, host: str, cache_dir: Path | None = None):
+        load_dotenv()
         self.base = os.environ.get("ONSHAPE_API", f"https://{host}").rstrip("/")
         self.cache = cache_dir or Path.home() / ".cache" / "cad2urdf" / "onshape"
         self.cache.mkdir(parents=True, exist_ok=True)
@@ -77,7 +91,8 @@ class Client:
     def _auth(self) -> dict:
         ak, sk = os.environ.get("ONSHAPE_ACCESS_KEY"), os.environ.get("ONSHAPE_SECRET_KEY")
         if not (ak and sk):
-            raise SystemExit("ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY are not set (see docs/ONSHAPE_API_KEYS.md)")
+            raise SystemExit("ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY are not set: export them, or put them in the "
+                             "repo's untracked .env file (see docs/ONSHAPE_API_KEYS.md)")
         return {"Authorization": "Basic " + base64.b64encode(f"{ak}:{sk}".encode()).decode()}
 
     def get(self, path: str, params: dict | None = None, binary: bool = False):
