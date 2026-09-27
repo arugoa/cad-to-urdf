@@ -192,6 +192,19 @@ def check_pybullet(urdf: Path, fixed: bool) -> dict:
     info = [p.getJointInfo(rid, i) for i in range(n)]
     idx = {i[1].decode(): i[0] for i in info}
     lname = {i[0]: i[12].decode() for i in info}
+    # apply the SRDF's disabled pairs, as a real PyBullet user would (PyBullet doesn't read SRDF itself);
+    # without it, parts that overlap at rest by design (nested rings, rollers in wheels) blow apart
+    link_idx = {v: k for k, v in lname.items()}
+    link_idx[ET.parse(urdf).getroot().find("link").get("name")] = -1  # base link
+    srdf = urdf.with_suffix(".srdf")
+    n_filtered = 0
+    if srdf.exists():
+        for dc in ET.parse(srdf).getroot().findall("disable_collisions"):
+            a, b = link_idx.get(dc.get("link1")), link_idx.get(dc.get("link2"))
+            if a is not None and b is not None:
+                p.setCollisionFilterPair(rid, rid, a, b, 0)
+                n_filtered += 1
+    res["srdf_pairs_filtered"] = n_filtered
     p.performCollisionDetection()
     res["self_contacts_at_zero"] = sorted({tuple(sorted((lname.get(c[3], "base"), lname.get(c[4], "base"))))
                                            for c in p.getContactPoints(rid, rid) if c[8] < -1e-4})

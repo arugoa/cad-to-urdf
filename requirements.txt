@@ -8,6 +8,7 @@ pyyaml
 networkx                 # min-cut over part contacts (STEP draft)
 rtree
 manifold3d
+fast-simplification      # decimate heavy visual meshes (MuJoCo rejects STLs > 200k triangles)
 mujoco>=3.2              # SRDF self-collision sampling, MJCF validation, field drop test
 
 # --- Onshape front end (our own REST client) ---
