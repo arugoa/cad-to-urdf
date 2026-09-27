@@ -69,10 +69,18 @@ python3.11 -m venv .venv && . .venv/bin/activate && pip install -r requirements.
 
 > **ROS users:** if `/opt/ros/*/setup.bash` is sourced, ROS's `PYTHONPATH` leaks into the venv and breaks pytest and some imports. Prefix commands with `env -u PYTHONPATH`, or use a shell without ROS sourced.
 
+Configure secrets (only needed for the Onshape API route):
+
+```bash
+cp .env.example .env        # .env is git-ignored; fill in your Onshape API keys
+```
+
+`.env.example` is the committed template and lists every setting cad2urdf reads. Your real `.env` stays local and is never committed. cad2urdf loads it automatically, so there's nothing to `source`.
+
 Check the install:
 
 ```bash
-pytest -q                                    # ~5 s, 17 tests
+pytest -q                                    # ~5 s
 python -m cad2urdf.route --list              # prints the routing matrix
 ```
 
@@ -113,13 +121,16 @@ Masses come from the materials you assigned in Onshape, and meshes are fetched p
 - **Company / Enterprise account:** only an **admin** can create keys. They go to user icon → **Enterprise settings** → **Developer** → **API keys** → **Create new API key**, assign it to you, and send you both values.
 - The secret key is shown only once. No admin available? Use Option A instead.
 
-**2. Export them in your shell.** Never commit them. Put them in `~/.bashrc` or an untracked `.env` you `source`.
+**2. Put them in `.env`.** Copy the template, then fill in the two values:
 
 ```bash
-export ONSHAPE_ACCESS_KEY=<access key>
-export ONSHAPE_SECRET_KEY=<secret key>
-# optional: ONSHAPE_API=https://yourteam.onshape.com  (defaults to the document URL's domain)
+cp .env.example .env
+# .env
+ONSHAPE_ACCESS_KEY=<access key>
+ONSHAPE_SECRET_KEY=<secret key>
 ```
+
+`.env` is git-ignored. Never paste keys into code, commits or chat. Exporting the same variables in your shell also works; shell values take precedence.
 
 **3. Run with the assembly's URL.** The `/e/...` part must be the assembly tab:
 
