@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -231,9 +231,13 @@ def _inner_side(q: cad.Part, ring, scale: float) -> bool:
     return bool(co) and max(f.radius for f in co) <= (r_in + r_out) / 2
 
 
-def _link_name(names: list[str], taken: set[str]) -> str:
-    stems = Counter(re.split(r"[_\-\s]", n)[0].lower() for n in names)
-    base = re.sub(r"[^a-z0-9_]", "_", stems.most_common(1)[0][0]) or "link"
+def _link_name(parts: list, taken: set[str]) -> str:
+    """Name a link after its largest part that isn't a fastener or bearing (else its largest part)."""
+    real = [p for p in parts if not (FASTENER_NAME.search(p.name) or BEARING_NAME.search(p.name))]
+    main = max(real or parts, key=lambda p: p.volume)
+    base = re.sub(r"[^a-z0-9]+", "_", main.name.split("#")[0].lower()).strip("_")[:24] or "link"
+    if base[0].isdigit():
+        base = "link_" + base
     name, k = base, 2
     while name in taken:
         name, k = f"{base}_{k}", k + 1
@@ -306,8 +310,10 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
     G.add_nodes_from(p.name for p in parts)
     for a, b in touching:
         if tuple(sorted((a, b))) not in running_pairs and fixed(a, b):
-            # a servo housing is always bolted to what its body touches: never cut those contacts
-            cap = 1e9 if (a in servos or b in servos) else _contact_strength(by_name[a], by_name[b], tol_cad)
+            # a servo housing is bolted to what its body touches, and a bearing's outer race is press-fit in
+            # what it touches (its inner side is not an edge here): never cut those contacts
+            cap = 1e9 if (a in servos or b in servos or a in rings or b in rings) \
+                else _contact_strength(by_name[a], by_name[b], tol_cad)
             G.add_edge(a, b, capacity=cap)
     for c in cands:  # press fits: never cut
         if c.clearance <= press_fit_tol and fixed(c.link_a, c.link_b):
@@ -318,18 +324,25 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
     # Constraint: a servo/bearing and the parts on its rotating side must end up in different links.
     # CAD is often saved in a folded/posed configuration where links rest against each other; those
     # incidental contacts are cut with a minimum cut (weakest total contact first). Deterministic.
-    cut_edges = []
+    cut_edges, welded_shut = [], []
     changed = True
     while changed:
         changed = False
         for srv in sorted(inner_of):
             for o in sorted(inner_of[srv]):
-                if nx.has_path(G, srv, o):
-                    _, (side_a, side_b) = nx.minimum_cut(G, srv, o)
-                    cut = sorted((u, v) for u in side_a for v in G[u] if v in side_b)
-                    G.remove_edges_from(cut)
-                    cut_edges += cut
-                    changed = True
+                if (srv, o) in welded_shut or not nx.has_path(G, srv, o):
+                    continue
+                val, (side_a, side_b) = nx.minimum_cut(G, srv, o)
+                if val >= 1e8:  # only press fits / servo mounts connect them: don't cut those, report instead
+                    welded_shut.append((srv, o))
+                    continue
+                cut = sorted((u, v) for u in side_a for v in G[u] if v in side_b)
+                G.remove_edges_from(cut)
+                cut_edges += cut
+                changed = True
+    if welded_shut:
+        review.append(f"{len(welded_shut)} joint(s) welded shut by press fits / servo mounts (check the "
+                      f"link grouping): {welded_shut[:6]}")
     # A mechanism's joints must form a tree over its links. If the rigid contacts plus the joints close
     # a loop, one of the rigid contacts on it is incidental (posed CAD): cut the weakest contact inside a
     # link on the loop. Loops whose cheapest cut is strong (a real four-bar) are kept and reported.
@@ -452,7 +465,7 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
     taken: set[str] = set()
     comp_name = {}
     for rep, ps in sorted(groups.items(), key=lambda kv: -sum(p.volume for p in kv[1])):
-        comp_name[rep] = _link_name([p.name for p in ps], taken)
+        comp_name[rep] = _link_name(ps, taken)
 
     def root_score(rep):
         ps = groups[rep]

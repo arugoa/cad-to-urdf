@@ -84,11 +84,11 @@ pytest -q                                    # ~5 s
 python -m cad2urdf.route --list              # prints the routing matrix
 ```
 
-**Big assemblies:** wrap heavy runs in `scripts/run_safely.sh`. It uses every idle core at the lowest CPU priority and caps memory at total RAM − 5 GB (`RESERVE_GB=` to change). A runaway conversion is then killed on its own instead of freezing your browser or editor:
+**Big assemblies are safe by default.** `cad2urdf.route`, `python -m cad2urdf` and `cad2urdf.scene` re-launch themselves in a sandbox:
+- every idle core is used, at the lowest CPU priority;
+- memory is capped at total RAM − 5 GB, with no swap.
 
-```bash
-scripts/run_safely.sh .venv/bin/python -m cad2urdf.route --cad onshape --format native --sim maniskill --run --input <url> --out build/robot
-```
+A runaway conversion is then stopped on its own (exit 137, with a message) instead of freezing your browser or editor. Settings: `CAD2URDF_RESERVE_GB=6` keeps more RAM free; `CAD2URDF_NO_SANDBOX=1` disables the sandbox (CI, containers). For other heavy commands, `scripts/run_safely.sh <command>` does the same.
 
 Optional simulator installs, for running the outputs rather than only generating them:
 - **Isaac Lab:** follow the [Isaac Lab install guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
@@ -328,17 +328,30 @@ Covers:
 
 ## Status and limitations
 
-| Route | Status |
+Tested on an RTX 3070 Ti laptop, Ubuntu 22.04. Check results are written to each output's `validation.json`.
+
+| Route / input | Result |
 |---|---|
-| STEP → any sim (sample arm) | ✅ fully automatic; 7 links and 6 joint types recovered from geometry; runs in MuJoCo, PyBullet, SAPIEN, ManiSkill CPU + GPU |
-| Exporter URDF → any sim (SolidWorks-exported infantry) | ✅ loads and runs in SAPIEN, ManiSkill (CPU + GPU) and MuJoCo (via our MJCF) |
+| **Onshape (own REST client), 7 public robots** | ✅ joint counts match the reference exactly: 2-wheeler 2, adjustable arm 4, quadruped 12, dog 12, Sigmaban humanoid 20, Orbita parallel 7, RSK soccer 64 (3 wheels + 60 omni rollers + kicker) |
+| Onshape, pneumatic cylinder | ✅ slider limits and direction from the mates; checked in MuJoCo, PyBullet, SAPIEN, ManiSkill (CPU + GPU) |
+| STEP, SO-100 arm (servo-driven, saved folded) | ✅ drafted automatically: the reference's exact 7 links / 6 joints |
+| STEP, sample arm4 | ✅ 7 links / 6 joints from geometry alone |
+| Exporter URDF (SolidWorks infantry) | ✅ runs in SAPIEN, ManiSkill (CPU + GPU) and MuJoCo |
 | Static scene (ARC 3v3 field, surface-only STEP) | ✅ 925 collision shapes; 0 of 400 drop-test balls fall through |
-| Onshape native (own REST client) | ⚠️ tested offline against recorded API response shapes; not yet run against a live document |
-| Isaac Lab / Gazebo | ⚠️ files generated; Isaac Lab not executed; Gazebo checked with `gz sdf` conversion only |
+| Big STEP robots (TR hero, Infantry 2026 chassis) | ⚠️ drafts still wrong: 1,000+ parts with axle screws, belts and suspension linkages. Use the Onshape route |
+
+Simulators checked by `cad2urdf.validate`:
+- MuJoCo (URDF import and native MJCF), PyBullet, SAPIEN, ManiSkill 3 (CPU and GPU PhysX) and yourdfpy;
+- **Gazebo Classic 11**: URDF → SDF, headless `gzserver`, physics stepped, joint angles and link poses read back. Mimic joints are dropped for this check, because Classic needs a plugin for them;
+- Isaac Sim: an import-and-drive probe exists (`cad2urdf/isaac_probe.py`), but Isaac Sim 5.1's RTX renderer crashes at startup on this laptop's NVIDIA 595 driver. Isaac Sim 6.1 is being tried.
 
 Known limitations:
-- **STEP loses mates.** Inferring joints from geometry works when running fits are drawn with clearance. On large real assemblies, parts that touch everywhere weld links together: a bearing touches both the shaft and the housing, and gears and belts touch each other. On a 1,142-part robot the draft found only one joint. For real robots, use a route that reads the mates (Onshape export/API, sw2robot, ACDC4Robot, creo2urdf).
-- **Joint limits and real masses** aren't in the geometry. Set them in the spec.
-- **Large STEP files** are slow the first time (about 5 min for 1,000+ parts). The contact search is then cached in `~/.cache/cad2urdf/`.
+- **STEP loses mates.** Geometry rules cover shaft/bore fits, bearings, servos (horn vs body), fasteners, gears, press fits and folded poses (incidental contacts are cut with a minimum cut). Dense 1,000-part robots still need the mates route.
+- **Onshape Enterprise documents** (e.g. `yourteam.onshape.com`) need a key issued by an Enterprise admin; a personal key gets 403. See [`docs/ONSHAPE_API_KEYS.md`](docs/ONSHAPE_API_KEYS.md).
+- **Onshape conventions honoured:**
+  - if any mate is named `dof_*`, top-level instances are the links, only `dof_*` mates are joints, fastened mates join, and other mates are ignored (`_inv` flips an axis);
+  - otherwise every mate is read as-is;
+  - instance-pattern copies stay rigid with their seed, composite parts are included, and `frame_*` markers are skipped.
+- **Joint limits and real masses** aren't in STEP geometry. Set them in the spec.
 
 See [`docs/RESEARCH.md`](docs/RESEARCH.md) for the full survey of existing tools, AI/MCP options, and how each simulator consumes URDF/SRDF and dynamics.
