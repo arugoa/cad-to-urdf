@@ -50,7 +50,8 @@ def test_pose(urdf: Path) -> dict[str, float]:
             lo, hi = j["lower"], j["upper"]
             mid = 0.0 if lo <= 0.0 <= hi else (lo + hi) / 2
             step = min(0.4 if j["type"] == "revolute" else 0.02, 0.3 * (hi - lo))
-            q[j["name"]] = float(np.clip(mid + step, lo, hi))
+            # step towards whichever side has room (a range like [-0.11, 0] must be tested downwards)
+            q[j["name"]] = float(mid + step if mid + step <= hi else max(mid - step, lo))
     for j in joints:
         if j["mimic"]:
             lead, mult, off = j["mimic"]
