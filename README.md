@@ -84,6 +84,12 @@ pytest -q                                    # ~5 s
 python -m cad2urdf.route --list              # prints the routing matrix
 ```
 
+**Big assemblies:** wrap heavy runs in `scripts/run_safely.sh`. It uses every idle core at the lowest CPU priority and caps memory at total RAM − 5 GB (`RESERVE_GB=` to change). A runaway conversion is then killed on its own instead of freezing your browser or editor:
+
+```bash
+scripts/run_safely.sh .venv/bin/python -m cad2urdf.route --cad onshape --format native --sim maniskill --run --input <url> --out build/robot
+```
+
 Optional simulator installs, for running the outputs rather than only generating them:
 - **Isaac Lab:** follow the [Isaac Lab install guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
 - **Gazebo + ros2_control:** `sudo apt install ros-$ROS_DISTRO-gz-ros2-control`.
@@ -296,6 +302,7 @@ examples/arm4/           parametric sample robot (build_cad.py → STEP → spec
 tests/                   pytest suite + view_urdf.py (ManiSkill / MuJoCo / browser viewer)
 docs/RESEARCH.md         research: tools, AI/MCP, joints, collision, dynamics, per-simulator needs
 docs/ONSHAPE_API_KEYS.md  how to get Onshape API keys (personal and Enterprise accounts)
+scripts/run_safely.sh    run heavy conversions at full idle CPU without starving other apps (memory cap)
 .agents/skills/cad2sim/  agent skill (Claude Code + Codex)
 ```
 

@@ -304,6 +304,16 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             raise ValueError(f"mate references unknown occurrence {path}")
         return ls[0]
 
+    # mates to instances the API didn't return (non-solid markers such as "frame_*" parts, sketches,
+    # mate-connector-only instances) are not physical joints: skip and report them
+    kept = []
+    for m in mates:
+        if all(leaves_under(p) for p in m.occ):
+            kept.append(m)
+        else:
+            review.append(f"mate {m.name}: references a non-solid or missing instance; ignored")
+    mates = kept
+
     uf = _UF()
     for p, o in occs.items():
         uf.find(p)
