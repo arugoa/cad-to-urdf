@@ -30,12 +30,28 @@ def rpy(T: np.ndarray) -> np.ndarray:
         return Rotation.from_matrix(T[:3, :3]).as_euler("xyz")
 
 
+# MuJoCo's STL decoder rejects files with more than 200,000 triangles (hard limit, found on a real Onshape
+# export); heavy visuals also slow every simulator. Decimate anything above this budget.
+MAX_VISUAL_FACES = 100_000
+
+
+def budget_mesh(mesh, max_faces: int = MAX_VISUAL_FACES):
+    """Quadric-decimate a mesh to at most ``max_faces`` triangles (unchanged if already within budget)."""
+    if len(mesh.faces) <= max_faces:
+        return mesh
+    try:
+        out = mesh.simplify_quadric_decimation(face_count=max_faces)
+    except Exception:  # noqa: BLE001  (no decimator installed: keep the MuJoCo limit at least)
+        out = mesh.submesh([mesh.area_faces.argsort()[::-1][:max_faces]], append=True)
+    return out if len(out.faces) else mesh
+
+
 def export_meshes(robot: Robot, mesh_dir: Path) -> None:
     (mesh_dir / "visual").mkdir(parents=True, exist_ok=True)
     (mesh_dir / "collision").mkdir(parents=True, exist_ok=True)
     for link in robot.links.values():
         for mat, mesh in link.visuals.items():
-            mesh.export(mesh_dir / "visual" / f"{link.name}_{mat}.stl")
+            budget_mesh(mesh).export(mesh_dir / "visual" / f"{link.name}_{mat}.stl")
         for i, g in enumerate(link.collisions):
             if g.kind == "mesh":
                 g.mesh.export(mesh_dir / "collision" / f"{link.name}_{i}.stl")

@@ -33,12 +33,18 @@ def expand_mimic(robot: Robot, q: dict[str, float]) -> dict[str, float]:
     return q
 
 
+# Pairs closer than this count as touching. Other engines (PyBullet, PhysX) add contact margins, so
+# parts that sit flush in CAD register as colliding there even when MuJoCo sees no penetration.
+TOUCH_MARGIN = 1e-3
+
+
 def collision_matrix(robot: Robot, mesh_dir: Path, samples: int = 5000, seed: int = 0):
     with tempfile.TemporaryDirectory() as tmp:
         xml_path = Path(tmp) / "probe.xml"
         build_mjcf(robot, meshdir=str(mesh_dir.resolve()), floor=False, filterparent=False,
                    collision_only=True, floating=False).write(xml_path, encoding="unicode")
         model = mujoco.MjModel.from_xml_path(str(xml_path))
+    model.geom_margin[:] = TOUCH_MARGIN  # report near-contacts too
     data = mujoco.MjData(model)
     joints = _joint_order(robot)
     body_name = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, i) for i in range(model.nbody)]
@@ -50,7 +56,7 @@ def collision_matrix(robot: Robot, mesh_dir: Path, samples: int = 5000, seed: in
         mujoco.mj_collision(model, data)
         pairs = set()
         for c in data.contact[: data.ncon]:
-            if c.dist < 0:  # real penetration, not just within margin
+            if c.dist < TOUCH_MARGIN:  # touching or within the margin other engines use
                 a = body_name[model.geom_bodyid[c.geom1]]
                 b = body_name[model.geom_bodyid[c.geom2]]
                 pairs.add(tuple(sorted((a, b))))
