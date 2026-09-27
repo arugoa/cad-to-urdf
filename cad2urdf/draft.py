@@ -351,19 +351,6 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
     for a, b in G.edges:
         uf.union(a, b)
 
-    groups: dict[str, list[cad.Part]] = defaultdict(list)
-    for p in parts:
-        groups[uf.find(p.name)].append(p)
-    taken: set[str] = set()
-    comp_name = {}
-    for rep, ps in sorted(groups.items(), key=lambda kv: -sum(p.volume for p in kv[1])):
-        comp_name[rep] = _link_name([p.name for p in ps], taken)
-
-    def root_score(rep):
-        ps = groups[rep]
-        return (any(ROOT_HINT.search(p.name) for p in ps), sum(p.volume for p in ps))
-
-    root = max(groups, key=root_score)
     if ignored:
         review.append(f"ignored {len(ignored)} placeholder part(s) (keep-out/zone/reference): {ignored[:8]}"
                       + (" ..." if len(ignored) > 8 else ""))
@@ -389,6 +376,63 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
                   f"{len(gears)} gear-named part(s); "
                   f"{len(set(welded))} bearing(s) had both sides welded together by other contacts: "
                   f"{sorted(set(welded))[:6]}")
+    # Redundant coaxial pivot (e.g. a servo's passive idler horn): a small group whose joints all lie on
+    # one axis, connecting two groups that are already jointed on that same axis. It adds a joint that
+    # can't move independently; merge it into the neighbour it touches more firmly (tie: rotating side).
+    def collinear(c1, c2) -> bool:
+        if abs(float(np.dot(c1.direction, c2.direction))) < np.cos(np.radians(1.0)):
+            return False
+        return float(np.linalg.norm(np.cross(c2.origin - c1.origin, c1.direction))) < 1e-3
+
+    merged_pivots = []
+    changed = True
+    while changed:
+        changed = False
+        by_comp: dict[str, list] = defaultdict(list)
+        for c in running:
+            a, b = uf.find(c.link_a), uf.find(c.link_b)
+            if a != b:
+                by_comp[a].append((b, c))
+                by_comp[b].append((a, c))
+        for comp_c, es in sorted(by_comp.items()):
+            nbrs = sorted({o for o, _ in es})
+            if len(nbrs) != 2 or not all(collinear(es[0][1], c) for _, c in es):
+                continue
+            na, nb = nbrs
+            if not any(o == nb and collinear(es[0][1], c) for o, c in by_comp.get(na, [])):
+                continue
+            members = {p.name for p in parts if uf.find(p.name) == comp_c}
+            if len(members) * 2 > len(parts):
+                continue  # never dissolve the main body
+
+            def firmness(n):
+                side = {p.name for p in parts if uf.find(p.name) == n}
+                return sum(_contact_strength(by_name[a], by_name[b], tol_cad) for a, b in touching
+                           if (a in members and b in side) or (b in members and a in side))
+
+            outputs = {uf.find(q) for qs in inner_of.values() for q in qs}
+            target = max((na, nb), key=lambda n: (firmness(n), n in outputs, n))
+            uf.union(next(iter(members)), target)
+            merged_pivots.append(sorted(members))
+            changed = True
+            break
+    if merged_pivots:
+        review.append(f"merged {len(merged_pivots)} redundant coaxial pivot(s) (idler horns etc.) into their "
+                      f"neighbour: {merged_pivots[:6]}")
+
+    groups: dict[str, list[cad.Part]] = defaultdict(list)
+    for p in parts:
+        groups[uf.find(p.name)].append(p)
+    taken: set[str] = set()
+    comp_name = {}
+    for rep, ps in sorted(groups.items(), key=lambda kv: -sum(p.volume for p in kv[1])):
+        comp_name[rep] = _link_name([p.name for p in ps], taken)
+
+    def root_score(rep):
+        ps = groups[rep]
+        return (any(ROOT_HINT.search(p.name) for p in ps), sum(p.volume for p in ps))
+
+    root = max(groups, key=root_score)
     edges = defaultdict(list)
     for c in running:
         a, b = uf.find(c.link_a), uf.find(c.link_b)
@@ -439,7 +483,7 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
         "actuators": {"default": {"kind": "position", "kp": 100.0, "kv": 5.0}},
     }
     review.append("materials: one uniform density (1200 kg/m^3); set real materials / mass overrides")
-    return spec, review
+    return spec, list(dict.fromkeys(review))
 
 
 def write_draft(spec: dict, review: list[str], path: Path) -> None:

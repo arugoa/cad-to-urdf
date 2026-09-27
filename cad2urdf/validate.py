@@ -254,6 +254,107 @@ def check_sapien(urdf: Path, fixed: bool) -> dict:
             "total_mass": round(float(sum(l.mass for l in robot.get_links())), 4), **s}
 
 
+def _gz_info(model: str, env: dict) -> dict:
+    """Parse `gz model -m <model> -i` into {'joints': {name: angle}, 'links': {name: (x, y, z)}}."""
+    out = subprocess.run(["gz", "model", "-m", model, "-i"], capture_output=True, text=True, env=env, timeout=30).stdout
+    joints, links, cur, kind, want_pos = {}, {}, None, None, False
+    for line in out.splitlines():
+        t = line.strip()
+        if t in ("joint {", "link {"):
+            kind, cur = t.split()[0], None
+        elif t.startswith("name:") and kind and cur is None:
+            cur = t.split('"')[1].split("::")[-1]
+        elif t.startswith("angle:") and kind == "joint" and cur:
+            joints.setdefault(cur, float(t.split()[1]))
+        elif t == "position {" and kind == "link" and cur and cur not in links:
+            want_pos, links[cur] = True, [0.0, 0.0, 0.0]
+        elif want_pos and t[:2] in ("x:", "y:", "z:"):
+            links[cur]["xyz".index(t[0])] = float(t.split()[1])
+        elif want_pos and t == "}":
+            want_pos = False
+    return {"joints": joints, "links": {k: tuple(v) for k, v in links.items()}}
+
+
+def check_gazebo(urdf: Path, fixed: bool, steps: int = 2000) -> dict:
+    """Gazebo Classic: URDF -> SDF (gz sdf), load headless, step physics, read joint angles and link poses."""
+    import os
+    import random
+    import shutil
+    import tempfile
+    import time
+
+    if not shutil.which("gzserver"):
+        return {"skipped": "gzserver not installed"}
+    work = Path(tempfile.mkdtemp(prefix="gz_", dir=urdf.parent))
+    root = ET.parse(urdf).getroot()
+    for m in root.iter("mesh"):
+        f = Path(m.get("filename"))
+        m.set("filename", "file://" + str(f if f.is_absolute() else (urdf.parent / f).resolve()))
+    mimic = [j.get("name") for j in root.findall("joint") if j.find("mimic") is not None]
+    for j in root.findall("joint"):  # Gazebo Classic needs a plugin for mimic; its converter loops on them
+        if j.find("mimic") is not None:
+            j.remove(j.find("mimic"))
+    name = root.get("name")
+    if fixed:
+        base = root.find("link").get("name")
+        root.insert(0, ET.Element("link", name="world"))
+        j = ET.SubElement(root, "joint", name="cad2urdf_world_fix", type="fixed")
+        ET.SubElement(j, "parent", link="world")
+        ET.SubElement(j, "child", link=base)
+    ET.ElementTree(root).write(work / "robot.urdf")
+    r = subprocess.run(["gz", "sdf", "-p", str(work / "robot.urdf")], capture_output=True, text=True, timeout=120)
+    if r.returncode or "<model" not in r.stdout:
+        return {"ok": False, "error": "gz sdf conversion failed: " + (r.stderr.strip()[-200:] or "no model")}
+    sdf = ET.fromstring(r.stdout)
+    model = sdf.find("model")
+    model.insert(0, ET.fromstring(f"<pose>0 0 {ground_clearance(urdf):.4f} 0 0 0</pose>"))
+    world = ET.fromstring(f"""<sdf version="{sdf.get('version')}"><world name="cad2urdf_check">
+      <physics type="ode"><max_step_size>0.001</max_step_size><real_time_update_rate>0</real_time_update_rate></physics>
+      <model name="ground_plane"><static>true</static><link name="link"><collision name="c"><geometry>
+        <plane><normal>0 0 1</normal><size>50 50</size></plane></geometry></collision></link></model>
+    </world></sdf>""")
+    world.find("world").append(model)
+    ET.ElementTree(world).write(work / "world.sdf")
+    env = {**os.environ, "GAZEBO_IP": "127.0.0.1", "GAZEBO_MODEL_DATABASE_URI": "",
+           "GAZEBO_MASTER_URI": f"http://127.0.0.1:{random.randint(20000, 40000)}"}
+    log = open(work / "server.log", "w")
+    srv = subprocess.Popen(["gzserver", "--verbose", "-u", str(work / "world.sdf")], stdout=log, stderr=subprocess.STDOUT,
+                           env=env)
+    try:
+        t0 = time.time()
+        while time.time() - t0 < 90:
+            txt = (work / "server.log").read_text(errors="ignore")
+            if "Loading world" in txt:
+                break
+            if srv.poll() is not None:
+                return {"ok": False, "error": "gzserver exited while loading"}
+            time.sleep(1)
+        time.sleep(4)
+        before = _gz_info(name, env)
+        if not before["links"]:
+            return {"ok": False, "error": "model not found in the running world (load failed?)",
+                    "errors_logged": txt.count("[Err]")}
+        subprocess.run(["gz", "world", "-m", str(steps)], env=env, timeout=60)
+        time.sleep(3)
+        after = _gz_info(name, env)
+    finally:
+        srv.terminate()
+        try:
+            srv.wait(10)
+        except subprocess.TimeoutExpired:
+            srv.kill()
+        log.close()
+    txt = (work / "server.log").read_text(errors="ignore")
+    vals = list(after["joints"].values()) + [c for p in after["links"].values() for c in p]
+    drift = max((float(np.linalg.norm(np.subtract(after["links"][k], before["links"][k])))
+                 for k in before["links"] if k in after["links"]), default=0.0)
+    shutil.rmtree(work, ignore_errors=True)
+    return {"ok": True, "links": len(after["links"]), "joints": len(after["joints"]), "steps": steps,
+            "finite": bool(np.all(np.isfinite(vals))), "max_link_drift_m": round(drift, 4),
+            "errors_logged": txt.count("[Err]"),
+            **({"mimic_dropped (Gazebo Classic needs a plugin)": mimic} if mimic else {})}
+
+
 MANISKILL_PROBE = r"""
 import importlib.util, json, sys, torch, gymnasium as gym
 spec = importlib.util.spec_from_file_location("agent", sys.argv[1]); m = importlib.util.module_from_spec(spec)
@@ -328,7 +429,7 @@ def check_maniskill(out: Path, urdf: Path) -> dict:
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("out", nargs="?", default="examples/arm4/output")
-    ap.add_argument("--sims", default="yourdfpy,mujoco,pybullet,sapien,maniskill")
+    ap.add_argument("--sims", default="yourdfpy,mujoco,pybullet,sapien,maniskill,gazebo")
     args = ap.parse_args(argv)
     out = Path(args.out)
     urdf = next(p for p in out.glob("*.urdf") if not p.name.startswith("_"))
@@ -346,6 +447,8 @@ def main(argv=None):
         checks.append(("sapien", lambda: check_sapien(urdf, fixed)))
     if "maniskill" in sims:
         checks.append(("maniskill", lambda: check_maniskill(out, urdf)))
+    if "gazebo" in sims:
+        checks.append(("gazebo", lambda: check_gazebo(urdf, fixed)))
     results = {"test_pose": test_pose(urdf)}
     for name, fn in checks:
         try:
