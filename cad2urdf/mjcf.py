@@ -58,7 +58,7 @@ def build_mjcf(
     ET.SubElement(col, "geom", group="3", friction=fmt(fr), condim="4", density="0", rgba="0.2 0.6 1 0.4")
 
     asset = ET.SubElement(root, "asset")
-    for mat, rgba in robot.materials.items():
+    for mat, rgba in robot.used_materials().items():
         ET.SubElement(asset, "material", name=mat, rgba=rgba)
     for link in robot.links.values():
         if not collision_only:
