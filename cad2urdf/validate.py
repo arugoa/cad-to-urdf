@@ -356,6 +356,44 @@ def check_gazebo(urdf: Path, fixed: bool, steps: int = 2000) -> dict:
             **({"mimic_dropped (Gazebo Classic needs a plugin)": mimic} if mimic else {})}
 
 
+def isaac_python() -> Path | None:
+    """Isaac Sim lives in its own environment (it pins its own Python); find its interpreter."""
+    import os
+
+    env = os.environ.get("CAD2URDF_ISAAC_PYTHON")
+    root = Path(__file__).resolve().parents[1]
+    for c in ([Path(env)] if env else []) + [root / ".venv-isaac6/bin/python", root / ".venv-isaac/bin/python"]:
+        if c.exists():
+            return c
+    return None
+
+
+def check_isaac(urdf: Path, fixed: bool) -> dict:
+    """Isaac Sim: import with its URDF importer (as Isaac Lab's UrdfFileCfg does), drive, step PhysX."""
+    import os
+
+    py = isaac_python()
+    if py is None:
+        return {"skipped": "no Isaac Sim environment (.venv-isaac6 / CAD2URDF_ISAAC_PYTHON)"}
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "DISPLAY", "WAYLAND_DISPLAY")}
+    env.update(OMNI_KIT_ACCEPT_EULA="YES")
+    icd = Path("/usr/share/vulkan/icd.d/nvidia_icd.json")
+    if icd.exists():
+        env["VK_ICD_FILENAMES"] = str(icd)  # hybrid laptops: keep Vulkan on the NVIDIA GPU
+    args = [str(py), str(Path(__file__).with_name("isaac_probe.py")), str(urdf.resolve()), json.dumps(test_pose(urdf))]
+    if not fixed:
+        args.append("--floating")
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, env=env, timeout=1800)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Isaac Sim timed out (30 min)"}
+    line = next((l for l in r.stdout.splitlines() if l.startswith("ISAAC_RESULT ")), None)
+    if line is None:
+        crashed = "Crash detected" in r.stdout + r.stderr
+        return {"ok": False, "error": f"Isaac Sim {'crashed' if crashed else 'failed'} (exit {r.returncode})"}
+    return json.loads(line[len("ISAAC_RESULT "):])
+
+
 MANISKILL_PROBE = r"""
 import importlib.util, json, sys, torch, gymnasium as gym
 spec = importlib.util.spec_from_file_location("agent", sys.argv[1]); m = importlib.util.module_from_spec(spec)
@@ -430,7 +468,8 @@ def check_maniskill(out: Path, urdf: Path) -> dict:
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("out", nargs="?", default="examples/arm4/output")
-    ap.add_argument("--sims", default="yourdfpy,mujoco,pybullet,sapien,maniskill,gazebo")
+    ap.add_argument("--sims", default="yourdfpy,mujoco,pybullet,sapien,maniskill,gazebo"
+                    + (",isaac" if isaac_python() else ""))
     args = ap.parse_args(argv)
     out = Path(args.out)
     urdf = next(p for p in out.glob("*.urdf") if not p.name.startswith("_"))
@@ -450,6 +489,8 @@ def main(argv=None):
         checks.append(("maniskill", lambda: check_maniskill(out, urdf)))
     if "gazebo" in sims:
         checks.append(("gazebo", lambda: check_gazebo(urdf, fixed)))
+    if "isaac" in sims:
+        checks.append(("isaac", lambda: check_isaac(urdf, fixed)))
     results = {"test_pose": test_pose(urdf)}
     for name, fn in checks:
         try:
