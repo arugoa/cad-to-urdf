@@ -103,6 +103,26 @@ class Robot:
     materials: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_RGBA))  # name -> "r g b a"
     floating_base: bool = False
 
+    def rotate(self, R: np.ndarray) -> None:
+        """Re-orient the whole robot in the world (e.g. a Y-up CAD export -> Z-up simulators).
+
+        Link-frame data (visuals, collisions, COM, inertia) are unchanged; world-frame data rotate.
+        """
+        T = np.eye(4)
+        T[:3, :3] = R
+        for link in self.links.values():
+            link.origin = R @ link.origin
+            link.rotation = R @ link.rotation
+            for p in link.parts:
+                if p.mesh is not None:
+                    p.mesh = p.mesh.copy()
+                    p.mesh.apply_transform(T)
+                p.com = R @ p.com
+                p.inertia = R @ p.inertia @ R.T
+        for j in self.joints.values():
+            j.origin = R @ j.origin
+            j.axis = R @ j.axis
+
     def used_materials(self) -> dict[str, str]:
         """Every material a visual references, with a colour (neutral grey for ones not in ``materials``,
         e.g. the "default" material of a drafted STEP spec)."""
@@ -268,5 +288,10 @@ def build(spec_path: Path) -> Robot:
             by_mat.setdefault(p.material, []).append(link.to_link(p.mesh))
         link.visuals = {mat: trimesh.util.concatenate(ms) for mat, ms in by_mat.items()}
 
-    return Robot(spec["robot"], spec, links, joints, candidates, roots[0],
-                 floating_base=spec.get("base", "fixed") == "floating")
+    robot = Robot(spec["robot"], spec, links, joints, candidates, roots[0],
+                  floating_base=spec.get("base", "fixed") == "floating")
+    if spec.get("root_rpy"):  # e.g. [1.5708, 0, 0] for a Y-up export
+        from scipy.spatial.transform import Rotation
+
+        robot.rotate(Rotation.from_euler("xyz", spec["root_rpy"]).as_matrix())
+    return robot
