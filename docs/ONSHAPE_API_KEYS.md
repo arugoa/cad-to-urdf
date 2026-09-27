@@ -25,7 +25,12 @@ API keys are managed in your Onshape **settings** (the old "Developer portal" li
    export ONSHAPE_SECRET_KEY=<secret key>
    ```
 
-   To keep them across sessions, put the lines in `~/.bashrc` or in an untracked `.env` file that you `source`.
+   Or put the same two lines (without `export`) in a **`.env` file at the repo root**. It is git-ignored, and cad2urdf reads it automatically:
+
+   ```
+   ONSHAPE_ACCESS_KEY=<access key>
+   ONSHAPE_SECRET_KEY=<secret key>
+   ```
 
 5. Run the route with the assembly's URL (the `.../e/<element id>` part must be the **assembly** tab):
 
