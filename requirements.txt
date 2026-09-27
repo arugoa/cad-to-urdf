@@ -5,6 +5,7 @@ coacd>=1.0.14            # approximate convex decomposition
 numpy
 scipy
 pyyaml
+networkx                 # min-cut over part contacts (STEP draft)
 rtree
 manifold3d
 mujoco>=3.2              # SRDF self-collision sampling, MJCF validation, field drop test
