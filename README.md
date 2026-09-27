@@ -19,7 +19,7 @@ The conversion is **deterministic**: the same inputs always give the same output
 
 - [How it works](#how-it-works)
 - [Setup](#setup)
-- [Onshape setup](#onshape-setup)
+- [Onshape setup](#onshape-setup) ([API key guide](docs/ONSHAPE_API_KEYS.md))
 - [Usage](#usage)
 - [Outputs](#outputs)
 - [The spec file](#the-spec-file)
@@ -84,6 +84,8 @@ Optional simulator installs, for running the outputs rather than only generating
 
 ## Onshape setup
 
+> 🔑 **Step-by-step API key guide (personal and Enterprise accounts): [`docs/ONSHAPE_API_KEYS.md`](docs/ONSHAPE_API_KEYS.md)**
+
 Onshape has two routes. Pick one.
 
 ### Option A: Onshape URDF export (no setup)
@@ -106,7 +108,7 @@ cad2urdf has its own Onshape client (`cad2urdf/onshape.py`). It reads the assemb
 
 Masses come from the materials you assigned in Onshape, and meshes are fetched per part. Responses are cached in `~/.cache/cad2urdf/onshape`, so re-runs work offline.
 
-**1. Get API keys.** They're managed in your Onshape settings, not the old Developer portal:
+**1. Get API keys** (full guide: [`docs/ONSHAPE_API_KEYS.md`](docs/ONSHAPE_API_KEYS.md)). They're managed in your Onshape settings, not the old Developer portal:
 - **Personal account:** user icon → **My account** → **Developer** → **API keys** → **Create new API key** (read permissions only).
 - **Company / Enterprise account:** only an **admin** can create keys. They go to user icon → **Enterprise settings** → **Developer** → **API keys** → **Create new API key**, assign it to you, and send you both values.
 - The secret key is shown only once. No admin available? Use Option A instead.
@@ -282,7 +284,7 @@ cad2urdf/
 examples/arm4/           parametric sample robot (build_cad.py → STEP → spec → outputs)
 tests/                   pytest suite + view_urdf.py (ManiSkill / MuJoCo / browser viewer)
 docs/RESEARCH.md         research: tools, AI/MCP, joints, collision, dynamics, per-simulator needs
-docs/ONSHAPE_API_KEYS.md
+docs/ONSHAPE_API_KEYS.md  how to get Onshape API keys (personal and Enterprise accounts)
 .agents/skills/cad2sim/  agent skill (Claude Code + Codex)
 ```
 
