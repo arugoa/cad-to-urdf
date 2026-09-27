@@ -17,20 +17,17 @@ API keys are managed in your Onshape **settings** (the old "Developer portal" li
 
 **No admin available?** Use Onshape's URDF export instead (no keys needed; see the end of this page).
 
-4. Put them in your shell. Never commit them or paste them into chat:
+4. Copy the template and fill in the two values. `.env` is git-ignored, and cad2urdf reads it automatically:
 
    ```bash
-   export ONSHAPE_API=https://tritonrobotics.onshape.com   # your domain; cad.onshape.com for normal accounts
-   export ONSHAPE_ACCESS_KEY=<access key>
-   export ONSHAPE_SECRET_KEY=<secret key>
+   cp .env.example .env
    ```
-
-   Or put the same two lines (without `export`) in a **`.env` file at the repo root**. It is git-ignored, and cad2urdf reads it automatically:
-
    ```
    ONSHAPE_ACCESS_KEY=<access key>
    ONSHAPE_SECRET_KEY=<secret key>
    ```
+
+   Exported shell variables also work and take precedence. Never commit keys or paste them into chat.
 
 5. Run the route with the assembly's URL (the `.../e/<element id>` part must be the **assembly** tab):
 

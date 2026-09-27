@@ -58,7 +58,14 @@ ASSEMBLY = {
 FEATURES = {"features": [{"message": {"featureId": "f2", "parameters": [
     {"message": {"parameterId": "limitsEnabled", "value": True}},
     {"message": {"parameterId": "limitAxialZMin", "expression": "-90 deg"}},
-    {"message": {"parameterId": "limitAxialZMax", "expression": "90 deg"}}]}}]}
+    {"message": {"parameterId": "limitAxialZMax", "expression": "90 deg"}}]}},
+    # sliders keep translation limits in limitZ* (the limitAxialZ* rotation fields are present but 0)
+    {"message": {"featureId": "f3", "parameters": [
+        {"message": {"parameterId": "limitsEnabled", "value": True}},
+        {"message": {"parameterId": "limitZMin", "expression": "0 in"}},
+        {"message": {"parameterId": "limitZMax", "expression": "4.5 in"}},
+        {"message": {"parameterId": "limitAxialZMin", "expression": "0 deg"}},
+        {"message": {"parameterId": "limitAxialZMax", "expression": "0 deg"}}]}}]}
 BOXES = {"JA": (0.2, 0.2, 0.05), "JB": (0.04, 0.04, 0.25), "JC": (0.3, 0.04, 0.04), "JD": (0.05, 0.05, 0.05)}
 
 
@@ -94,7 +101,8 @@ def test_onshape_mates_become_links_and_joints():
     assert (sl.type, sl.parent, sl.child) == ("prismatic", "arm", "carriage")
     np.testing.assert_allclose(sl.axis, [1, 0, 0], atol=1e-12)
     np.testing.assert_allclose(sl.origin, [0.2, 0, 0.30], atol=1e-12)
-    assert any("slider without limits" in x for x in r.review)
+    # Onshape limits describe entity 0 relative to entity 1; the carriage is entity 1, so they flip
+    np.testing.assert_allclose([sl.lower, sl.upper], [-4.5 * 0.0254, 0.0])
     base = r.links["base_link"]
     assert abs(base.mass - 2700 * (0.2 * 0.2 * 0.05 + 0.04 * 0.04 * 0.25)) < 1e-6
 

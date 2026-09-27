@@ -71,7 +71,12 @@ def build_mjcf(
     world = ET.SubElement(root, "worldbody")
     if floor:
         ET.SubElement(world, "light", pos="0 0 3", dir="0 0 -1", directional="true")
-        ET.SubElement(world, "geom", name="floor", type="plane", size="10 10 0.1", rgba="0.9 0.9 0.9 1")
+        # floor just below the robot's lowest point at q=0, so CAD coordinates stay untouched
+        zs = [(l.rotation @ m.vertices.T).T[:, 2].min() + l.origin[2]
+              for l in robot.links.values() for m in l.visuals.values() if len(m.vertices)]
+        z_floor = min(0.0, min(zs) - 0.01) if zs else 0.0
+        ET.SubElement(world, "geom", name="floor", type="plane", size="10 10 0.1", pos=fmt((0, 0, z_floor)),
+                      rgba="0.9 0.9 0.9 1")
 
     def add_body(parent_el: ET.Element, name: str):
         link = robot.links[name]

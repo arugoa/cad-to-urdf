@@ -21,7 +21,9 @@ defaults to the document URL's domain, so Enterprise domains work.
 Spec keys used here (all optional besides ``source``):
 
     source: https://<domain>/documents/<did>/w/<wid>/e/<eid>
-    subassemblies: flexible | rigid   # flexible (default): mates inside sub-assemblies are honoured
+    subassemblies: flexible | rigid   # flexible (default, Onshape's behaviour): sub-assembly mates cascade up
+    rigid_subassemblies: [regex, ...] # sub-assembly instance names to treat as one rigid body ("Make rigid"
+                                      # in Onshape is not exposed by the API)
     default_density: 1200             # for parts without an Onshape material (kg/m^3)
     joints / dynamics / actuators / collision / srdf    # as elsewhere
 """
@@ -92,7 +94,7 @@ class Client:
         ak, sk = os.environ.get("ONSHAPE_ACCESS_KEY"), os.environ.get("ONSHAPE_SECRET_KEY")
         if not (ak and sk):
             raise SystemExit("ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY are not set: export them, or put them in the "
-                             "repo's untracked .env file (see docs/ONSHAPE_API_KEYS.md)")
+                             "repo's untracked .env file (cp .env.example .env; see docs/ONSHAPE_API_KEYS.md)")
         return {"Authorization": "Basic " + base64.b64encode(f"{ak}:{sk}".encode()).decode()}
 
     def get(self, path: str, params: dict | None = None, binary: bool = False):
@@ -159,23 +161,38 @@ def _limits(client: Client, ref: dict, mates: dict[str, Mate]) -> None:
             params[pm.get("parameterId")] = pm.get("expression", pm.get("value"))
         if str(params.get("limitsEnabled")).lower() != "true":
             continue
-        # revolute: rotation about the mate Z axis; slider: translation along it
-        lo, hi = parse_quantity(params.get("limitAxialZMin")), parse_quantity(params.get("limitAxialZMax"))
+        # sliders store translation limits in limitZ*, revolute/cylindrical rotation limits in limitAxialZ*
+        # (seen on the live API; both families are always present, only the matching one is meaningful)
+        pre = "limitZ" if mates[fid].type == "SLIDER" else "limitAxialZ"
+        lo, hi = parse_quantity(params.get(pre + "Min")), parse_quantity(params.get(pre + "Max"))
         if lo is not None and hi is not None:
             mates[fid].limits = (lo, hi)
 
 
-def read_assembly(client: Client, ref: dict, flexible: bool = True):
+def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patterns: tuple = ()):
     """Flatten the assembly: leaf part occurrences (world frames) + mates (global paths) + relations."""
-    asm = client.get(f"/api/v10/assemblies/d/{ref['did']}/{ref['wvm']}/{ref['wvmid']}/e/{ref['eid']}",
-                     {"includeMateFeatures": "true", "includeMateConnectors": "true", "includeNonSolids": "false"})
+    try:
+        asm = client.get(f"/api/v10/assemblies/d/{ref['did']}/{ref['wvm']}/{ref['wvmid']}/e/{ref['eid']}",
+                         {"includeMateFeatures": "true", "includeMateConnectors": "true", "includeNonSolids": "false"})
+    except RuntimeError as e:
+        if "must be an assembly" not in str(e):
+            raise
+        els = client.get(f"/api/v10/documents/d/{ref['did']}/{ref['wvm']}/{ref['wvmid']}/elements")
+        base = f"https://{ref['host']}/documents/{ref['did']}/{ref['wvm']}/{ref['wvmid']}/e/"
+        lines = [f"  {e['name']}: {base}{e['id']}" for e in els if e["elementType"] == "ASSEMBLY"]
+        raise SystemExit("That link is not an assembly tab (it's a Part Studio or another element). "
+                         "Assemblies in this document:\n" + "\n".join(lines)) from None
     root = asm["rootAssembly"]
     subs = {(s["documentId"], s["elementId"], s.get("configuration", "")): s for s in asm.get("subAssemblies", [])}
     occ_T = {tuple(o["path"]): np.array(o["transform"], float).reshape(4, 4) for o in root["occurrences"]}
+    # linked-document parts must be fetched through the linked *version*; parts[] carries it
+    versions = {(q["documentId"], q["elementId"], q["partId"]): q.get("documentVersion")
+                for q in asm.get("parts", []) if q.get("documentVersion")}
     occ_fixed = {tuple(o["path"]) for o in root["occurrences"] if o.get("fixed")}
     occs: dict[tuple, Occ] = {}
     mates: list[Mate] = []
     relations: list[dict] = []
+    groups: list[list[tuple]] = []  # Group mates: everything listed moves as one rigid body
 
     def walk(defn: dict, prefix: tuple, rigid: tuple | None):
         for inst in defn["instances"]:
@@ -184,9 +201,16 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True):
             path = prefix + (inst["id"],)
             if inst["type"] == "Assembly":
                 sub = subs[(inst["documentId"], inst["elementId"], inst.get("configuration", ""))]
-                walk(sub, path, rigid if rigid else (None if flexible else path))
+                # Onshape sub-assemblies are flexible by default (their mates' DOF cascade up to the parent).
+                # The API does not expose "Make rigid", so rigid ones are named in the spec.
+                named_rigid = any(re.search(p, inst["name"], re.I) for p in rigid_patterns)
+                walk(sub, path, rigid if rigid else (path if (named_rigid or not flexible) else None))
             elif inst["type"] == "Part":
-                occs[path] = Occ(path, inst["name"], occ_T[path], inst, path in occ_fixed, rigid)
+                part = dict(inst)
+                v = versions.get((inst["documentId"], inst["elementId"], inst["partId"]))
+                if v and not part.get("documentVersion"):
+                    part["documentVersion"] = v
+                occs[path] = Occ(path, inst["name"], occ_T[path], part, path in occ_fixed, rigid)
         for f in defn.get("features", []):
             if f.get("suppressed"):
                 continue
@@ -197,22 +221,36 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True):
                                   [prefix + tuple(e["matedOccurrence"]) for e in ents], [_cs(e["matedCS"]) for e in ents]))
             elif f["featureType"] == "mateRelation":
                 relations.append({**d, "prefix": prefix})
+            elif f["featureType"] == "mateGroup":
+                groups.append([prefix + tuple(o["occurrence"]) for o in d.get("occurrences", [])])
 
     walk(root, (), None)
     by_id = {m.feature_id: m for m in mates}
     _limits(client, ref, by_id)
-    return occs, occ_T, mates, relations
+    return occs, occ_T, mates, relations, groups
 
 
-def _mesh_and_mass(client: Client, occ: Occ, density: float):
+def _mesh_and_mass(client: Client, occ: Occ, density: float, top_did: str | None = None):
     p = occ.part
-    wvm, wvmid = ("m", p["documentMicroversion"]) if p.get("documentMicroversion") else ("w", None)
-    if wvmid is None:
-        raise ValueError(f"part {occ.name} has no documentMicroversion")
+    linked = bool(top_did and p["documentId"] != top_did)
+    if linked and p.get("documentVersion"):
+        wvm, wvmid = "v", p["documentVersion"]  # linked documents are only readable at the linked version
+    elif p.get("documentMicroversion"):
+        wvm, wvmid = "m", p["documentMicroversion"]
+    else:
+        raise ValueError(f"part {occ.name} has no document version/microversion")
     base = f"/api/v10/parts/d/{p['documentId']}/{wvm}/{wvmid}/e/{p['elementId']}/partid/{quote(p['partId'], safe='')}"
     cfg = {"configuration": p.get("configuration", "")}
+    if linked:
+        # part lives in a linked document (library / purchased part): Onshape grants access only
+        # through the document that links to it
+        cfg["linkDocumentId"] = top_did
     stl = client.get(base + "/stl", {**cfg, "mode": "binary", "units": "meter", "grouping": "true"}, binary=True)
     mesh = trimesh.load(io.BytesIO(stl), file_type="stl", force="mesh")
+    # Onshape's STL does not share vertices between triangles: weld coincident vertices (1 um) so parts
+    # come out as closed solids (needed for volumes, containment and exact-geometry checks)
+    mesh.merge_vertices(digits_vertex=6)
+    mesh.remove_unreferenced_vertices()
     mesh.apply_transform(occ.T)
     mp = client.get(base + "/massproperties", {**cfg, "useMassPropertyOverrides": "true"})
     body = next(iter(mp.get("bodies", {}).values()), {})
@@ -253,7 +291,8 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
     ref = parse_url(spec["source"])
     client = client or Client(ref["host"])
     flexible = spec.get("subassemblies", "flexible") != "rigid"
-    occs, occ_T, mates, relations = read_assembly(client, ref, flexible)
+    occs, occ_T, mates, relations, rigid_groups = read_assembly(
+        client, ref, flexible, tuple(spec.get("rigid_subassemblies", [])))
     review: list[str] = []
 
     def leaves_under(path):  # a mate may reference a sub-assembly occurrence
@@ -270,6 +309,10 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
         uf.find(p)
         if o.rigid_group:
             uf.union(p, rep(o.rigid_group))
+    for grp in rigid_groups:  # Group mates
+        leaves = [rep(p) for p in grp if leaves_under(p)]
+        for a in leaves[1:]:
+            uf.union(leaves[0], a)
     moving = []
     for m in mates:
         a, b = rep(m.occ[0]), rep(m.occ[1])
@@ -288,7 +331,7 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
 
     # --- tree over groups: BFS from the fixed / heaviest group
     density = spec.get("default_density", 1200.0)
-    part_data = {p: _mesh_and_mass(client, o, density) for p, o in occs.items()}
+    part_data = {p: _mesh_and_mass(client, o, density, ref["did"]) for p, o in occs.items()}
     gmass = {g: sum(part_data[p][1] for p in ps) for g, ps in groups.items()}
     fixed_groups = [g for g, ps in groups.items() if any(occs[p].fixed for p in ps)]
     root = max(fixed_groups or groups, key=lambda g: gmass[g])
@@ -352,23 +395,39 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
         if g in parent_of:
             pg, m, side = parent_of[g]
             c = 1 - side  # index of this (child) side in the mate
-            Tj = occ_T[m.occ[c]] @ m.cs[c]  # mate frame in world; the occurrence may be a sub-assembly
+            F = [occ_T[m.occ[k]] @ m.cs[k] for k in (0, 1)]  # both mate frames in world
+            axis_w = F[0][:3, 2]
             jname = _key(m.name)
             while jname in joints:
                 jname += "_"
             jtype = "prismatic" if m.type == "SLIDER" else "revolute"
-            lo, hi = m.limits if m.limits else (None, None)
-            if m.limits is None:
-                if jtype == "revolute":
-                    jtype = "continuous"
-                else:
-                    lo, hi = -0.1, 0.1
-                    review.append(f"joints.{jname}: slider without limits in Onshape; placeholder +/-0.1 m")
+            # Onshape's mate value is the motion of entity 0 relative to entity 1 along/about the mate Z
+            # axis, from the mate's own zero. (Established on a real pneumatic cylinder: SLIDER limits
+            # [-4.5 in, 0] with the piston as entity 0 and mate Z pointing down only fit the geometry if
+            # the piston moves UP into the barrel.) Our joint zero is the assembly's current pose and the
+            # joint moves the child along +axis_w, so shift by the current value and flip the sign when
+            # the child is entity 1.
+            if jtype == "prismatic":
+                q_now = float(np.dot(F[0][:3, 3] - F[1][:3, 3], axis_w))
+            else:
+                x0, x1 = F[0][:3, 0], F[1][:3, 0]
+                q_now = float(np.arctan2(np.dot(np.cross(x1, x0), axis_w), np.dot(x0, x1)))
+            sign = 1.0 if c == 0 else -1.0
+            lo = hi = None
+            if m.limits is not None:
+                a, b = sorted(sign * (v - q_now) for v in m.limits)
+                lo, hi = a, b
+            elif jtype == "revolute":
+                jtype = "continuous"
+            else:
+                lo, hi = -0.1, 0.1
+                review.append(f"joints.{jname}: slider without limits in Onshape; placeholder +/-0.1 m")
+            Tj = F[c]
             ov = overrides.get(jname, {})
-            lo, hi = ov.get("limits", [lo or 0.0, hi or 0.0])
+            lo, hi = ov.get("limits", [lo if lo is not None else 0.0, hi if hi is not None else 0.0])
             joints[jname] = Joint(
                 name=jname, type=ov.get("type", jtype), parent=gname[pg], child=name,
-                origin=Tj[:3, 3].copy(), axis=Tj[:3, 2] * ov.get("axis_sign", 1), lower=lo, upper=hi,
+                origin=Tj[:3, 3].copy(), axis=axis_w * ov.get("axis_sign", 1), lower=lo, upper=hi,
                 effort=ov.get("effort", 10.0), velocity=ov.get("velocity", 5.0),
                 damping=_per(spec.get("dynamics", {}), jname).get("damping", 0.0),
                 friction=_per(spec.get("dynamics", {}), jname).get("friction", 0.0),

@@ -231,6 +231,11 @@ def check_sapien(urdf: Path, fixed: bool) -> dict:
         scene.set_timestep(1 / 500)
         loader = scene.create_urdf_loader()
         loader.fix_root_link = fixed
+        if not any(j.get("type") != "fixed" for j in root.findall("joint")):
+            # no moving joints: SAPIEN loads this as a plain rigid object, not an articulation
+            arts, actors, _ = loader.parse(str(tmp))
+            return {"ok": True, "note": "no moving joints: loaded as a rigid object",
+                    "objects": len(arts) + len(actors)}
         robot = loader.load(str(tmp))
     finally:
         tmp.unlink()
@@ -253,12 +258,21 @@ MANISKILL_PROBE = r"""
 import importlib.util, json, sys, torch, gymnasium as gym
 spec = importlib.util.spec_from_file_location("agent", sys.argv[1]); m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
-import mani_skill.envs
+import mani_skill.envs, sapien
+from mani_skill.envs.tasks.empty_env import EmptyEnv
+from mani_skill.utils.registration import register_env
 target = json.loads(sys.argv[3])
 backend = sys.argv[2]
+lift = float(sys.argv[4])
 n = 64 if backend == "physx_cuda" else 1
 cls = next(v for v in vars(m).values() if isinstance(v, type) and hasattr(v, "uid") and v.__module__ == "agent")
-env = gym.make("Empty-v1", robot_uids=cls.uid, num_envs=n, sim_backend=backend, control_mode="pd_joint_pos")
+
+@register_env("Cad2SimProbe-v1", max_episode_steps=10**9, override=True)
+class Probe(EmptyEnv):  # Empty-v1 has a floor at z=0: lift the robot so it doesn't start inside it
+    def _load_agent(self, options):
+        super(EmptyEnv, self)._load_agent(options, sapien.Pose(p=[0, 0, lift]))
+
+env = gym.make("Cad2SimProbe-v1", robot_uids=cls.uid, num_envs=n, sim_backend=backend, control_mode="pd_joint_pos")
 env.reset(seed=0)
 agent = env.unwrapped.agent
 act = []
@@ -276,17 +290,30 @@ print(json.dumps({"backend": backend, "num_envs": n, "action_dim": len(act),
 """
 
 
+def ground_clearance(urdf: Path, margin: float = 0.01) -> float:
+    """Height to lift a fixed-base robot so its collision geometry starts above a z=0 floor."""
+    import yourdfpy
+
+    r = yourdfpy.URDF.load(str(urdf), build_scene_graph=False, build_collision_scene_graph=True,
+                           load_meshes=False, load_collision_meshes=True)
+    b = r.collision_scene.bounds if r.collision_scene is not None and r.collision_scene.geometry else None
+    return max(0.0, -float(b[0][2]) + margin) if b is not None else 0.0
+
+
 def check_maniskill(out: Path, urdf: Path) -> dict:
     agent = next((out / "maniskill").glob("*_agent.py"), None)
     if agent is None:
         return {"ok": False, "error": "no maniskill/*_agent.py"}
     target = test_pose(urdf)
-    res = {}
+    if not target:
+        return {"skipped": "no moving joints: nothing for a ManiSkill agent to control (load it as an actor)"}
+    lift = ground_clearance(urdf)
+    res = {"lifted_above_floor_m": round(lift, 4)}
     import os
 
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     for backend in ("physx_cpu", "physx_cuda"):
-        r = subprocess.run([sys.executable, "-c", MANISKILL_PROBE, str(agent), backend, json.dumps(target)],
+        r = subprocess.run([sys.executable, "-c", MANISKILL_PROBE, str(agent), backend, json.dumps(target), str(lift)],
                            capture_output=True, text=True, env=env, timeout=900)
         lines = [l for l in r.stdout.splitlines() if l.startswith("{")]
         if r.returncode or not lines:

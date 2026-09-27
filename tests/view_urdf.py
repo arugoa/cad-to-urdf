@@ -31,6 +31,10 @@ from pathlib import Path
 
 import numpy as np
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run as a script from anywhere
+
 
 # ------------------------------------------------------------------ what's in the dir
 def inspect_dir(path: Path) -> dict:
@@ -70,8 +74,13 @@ def view_mujoco(info: dict, screenshot: str | None) -> None:
         r = mujoco.Renderer(m, 720, 1280)
         cam = mujoco.MjvCamera()
         mujoco.mjv_defaultFreeCamera(m, cam)
-        cam.lookat[:] = m.stat.center
-        cam.distance = m.stat.extent * 1.1
+        # frame the model's own geoms (ignore the floor plane, which would dominate the extent)
+        idx = [i for i in range(m.ngeom) if m.geom_type[i] != mujoco.mjtGeom.mjGEOM_PLANE]
+        pts = d.geom_xpos[idx]
+        rad = m.geom_rbound[idx]
+        lo, hi = (pts - rad[:, None]).min(0), (pts + rad[:, None]).max(0)
+        cam.lookat[:] = (lo + hi) / 2
+        cam.distance = float(np.linalg.norm(hi - lo)) * 1.2
         cam.elevation, cam.azimuth = -40, 135
         r.update_scene(d, cam)
         _save(r.render(), screenshot)
@@ -83,7 +92,8 @@ def view_mujoco(info: dict, screenshot: str | None) -> None:
 
 
 # ------------------------------------------------------------------ ManiSkill
-def view_maniskill(info: dict, scene_info: dict | None, at: list[float], screenshot: str | None) -> None:
+def view_maniskill(info: dict, scene_info: dict | None, at: list[float], screenshot: str | None,
+                   size: float = 1.0) -> None:
     import gymnasium as gym
     import sapien
     import torch
@@ -134,8 +144,9 @@ def view_maniskill(info: dict, scene_info: dict | None, at: list[float], screens
 
         @property
         def _default_human_render_camera_configs(self):
-            eye = [extent * 0.6, -extent * 0.6, extent * 0.5] if static else [1.0, -1.0, 1.0]
-            look = [0, 0, 0] if static else [at[0], at[1], at[2] + 0.3]
+            k = max(size, 0.2)
+            eye = [extent * 0.6, -extent * 0.6, extent * 0.5] if static else [at[0] + 1.2 * k, at[1] - 1.2 * k, at[2] + 1.0 * k]
+            look = [0, 0, 0] if static else [at[0], at[1], at[2] + 0.4 * k]
             return CameraConfig("render_camera", sapien_utils.look_at(eye, look), 1280, 720, 1.0, 0.01, 100)
 
     env = gym.make("Cad2SimView-v1", render_mode="rgb_array" if screenshot else "human", obs_mode="none",
@@ -248,7 +259,8 @@ def main():
     ap.add_argument("path", type=Path, help="output dir (robot or scene) or a .urdf file")
     ap.add_argument("--sim", choices=["browser", "mujoco", "maniskill"], default="browser")
     ap.add_argument("--scene", type=Path, help="(maniskill) static scene output dir to place the robot on")
-    ap.add_argument("--at", type=float, nargs=3, default=[0.0, 0.0, 0.0], help="(maniskill) robot base position")
+    ap.add_argument("--at", type=float, nargs=3, default=None,
+                    help="(maniskill) robot base position; default lifts the robot just above the floor")
     ap.add_argument("--screenshot", help="save an image instead of opening a window (maniskill/mujoco)")
     ap.add_argument("--port", type=int, default=8080)
     args = ap.parse_args()
@@ -256,7 +268,20 @@ def main():
     if args.sim == "mujoco":
         view_mujoco(info, args.screenshot)
     elif args.sim == "maniskill":
-        view_maniskill(info, inspect_dir(args.scene) if args.scene else None, args.at, args.screenshot)
+        at = args.at
+        if at is None:
+            at = [0.0, 0.0, 0.0]
+            if info["kind"] == "robot" and info["urdf"] is not None:
+                from cad2urdf.validate import ground_clearance
+
+                at[2] = ground_clearance(info["urdf"])
+        size = 1.0
+        if info["kind"] == "robot" and info["urdf"] is not None:
+            import yourdfpy
+
+            b = yourdfpy.URDF.load(str(info["urdf"]), load_meshes=True).scene.bounds
+            size = float(np.linalg.norm(b[1] - b[0]))
+        view_maniskill(info, inspect_dir(args.scene) if args.scene else None, at, args.screenshot, size)
     else:
         view_browser(info, args.port)
 

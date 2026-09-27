@@ -58,7 +58,13 @@ def main(argv=None):
                     keyframes=keyframes)
     targets.write_targets(robot, out)
 
-    print("6/6 report")
+    print("6/6 report + joint-limit sweep")
+    from .sweep import limit_sweep
+
+    sweep = limit_sweep(robot)
+    for jn in sweep["limits_driving_into_parent"]:
+        print(f"  REVIEW joint {jn}: its limits drive the child into the parent's material "
+              f"({sweep['joints'][jn]}); check the limit sign/offset")
     report = {
         "robot": robot.name,
         "joint_candidates": [c.summary() for c in robot.candidates],
@@ -74,6 +80,7 @@ def main(argv=None):
             }
             for n, l in robot.links.items()
         },
+        "limit_sweep": sweep,
         "srdf_disabled": {f"{a}|{b}": r for (a, b), r in sorted(disabled.items())},
         "collision_sampling": stats,
     }
