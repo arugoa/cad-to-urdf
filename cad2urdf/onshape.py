@@ -202,6 +202,11 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
             (in_frame if f["featureData"].get("name", "").lower().startswith("frame_") else in_other).update(ids)
     frame_ids = in_frame - in_other  # parts attached ONLY through frame_* mates are markers
     occ_fixed = {tuple(o["path"]) for o in root["occurrences"] if o.get("fixed")}
+    # "dof_" naming convention: top-level instances are the links, sub-assemblies are rigid units
+    uses_dof = any(f["featureType"] == "mate" and f["featureData"].get("name", "").lower().startswith("dof_")
+                   for d in [root, *asm.get("subAssemblies", [])] for f in d["features"])
+    if uses_dof:
+        flexible = False
     occs: dict[tuple, Occ] = {}
     mates: list[Mate] = []
     relations: list[dict] = []
@@ -347,8 +352,8 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
     if use_dof:
         n_other = sum(1 for m in mates if not m.name.lower().startswith("dof_")
                       and m.type in ("REVOLUTE", "SLIDER", "CYLINDRICAL", "PIN_SLOT"))
-        review.append(f"'dof_' naming found: only dof_* mates are joints; all other mates hold parts rigidly "
-                      f"({n_other} of them are revolute/slider-type)")
+        review.append(f"'dof_' naming found: top-level instances are links (sub-assemblies rigid), only dof_* "
+                      f"mates are joints, fastened mates join, other mates ignored ({n_other} revolute/slider-type)")
 
     uf = _UF()
     for p, o in occs.items():
@@ -363,9 +368,11 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
     for m in mates:
         a, b = rep(m.occ[0]), rep(m.occ[1])
         if use_dof and not m.name.lower().startswith("dof_"):
-            # the designer declared the moving mates; every other mate (planar, parallel, revolute used
-            # to align a screw, ...) holds parts in place
-            uf.union(a, b)
+            # the designer declared the moving mates: fastened ones still join parts, every other mate
+            # (parallel/planar alignment, a revolute used to seat a screw, ...) is ignored; anything left
+            # unconnected is attached to the base below
+            if m.type == "FASTENED":
+                uf.union(a, b)
             continue
         if m.type == "FASTENED":
             uf.union(a, b)
