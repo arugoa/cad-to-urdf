@@ -516,4 +516,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    from cad2urdf.safety import sandbox
+
+    sandbox("cad2urdf.validate")
     main()

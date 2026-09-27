@@ -287,4 +287,7 @@ def main():
 
 
 if __name__ == "__main__":
+    from cad2urdf.safety import sandbox
+
+    sandbox()  # re-launch this script inside the shared memory cap
     main()

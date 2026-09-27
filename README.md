@@ -84,11 +84,12 @@ pytest -q                                    # ~5 s
 python -m cad2urdf.route --list              # prints the routing matrix
 ```
 
-**Big assemblies are safe by default.** `cad2urdf.route`, `python -m cad2urdf` and `cad2urdf.scene` re-launch themselves in a sandbox:
-- every idle core is used, at the lowest CPU priority;
-- memory is capped at total RAM − 5 GB, with no swap.
+**Out-of-memory protection is on by default.** `cad2urdf.route`, `python -m cad2urdf`, `cad2urdf.scene`, `cad2urdf.validate` and `tests/view_urdf.py` re-launch themselves in the systemd user slice `cad2urdf.slice`:
+- **One shared memory cap** (total RAM − 5 GB, no swap) covers *all* cad2urdf jobs together. A batch, a validation and a viewer running at once can't add up past it. Over the cap, only cad2urdf jobs are stopped (exit 137, with a message).
+- **Killed first:** every cad2urdf process sets `oom_score_adj=1000`, so if the machine still runs out of memory for another reason, the kernel kills our jobs before your editor or browser.
+- **Lowest CPU priority** (`nice 19`): every idle core is used, but other apps win.
 
-A runaway conversion is then stopped on its own (exit 137, with a message) instead of freezing your browser or editor. Settings: `CAD2URDF_RESERVE_GB=6` keeps more RAM free; `CAD2URDF_NO_SANDBOX=1` disables the sandbox (CI, containers). For other heavy commands, `scripts/run_safely.sh <command>` does the same.
+Settings: `CAD2URDF_RESERVE_GB=6` keeps more RAM free; `CAD2URDF_NO_SANDBOX=1` disables the sandbox (CI, containers). For any other heavy command (pip installs, Isaac Sim), `scripts/run_safely.sh <command>` puts it in the same capped slice.
 
 Optional simulator installs, for running the outputs rather than only generating them:
 - **Isaac Lab:** follow the [Isaac Lab install guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
