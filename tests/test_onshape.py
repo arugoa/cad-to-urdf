@@ -1,6 +1,7 @@
 """Onshape front end against a fake API that returns the real response shapes (no network, no keys)."""
 
 import io
+import json
 
 import numpy as np
 import trimesh
@@ -129,3 +130,38 @@ def test_onshape_robot_compiles_and_loads(tmp_path):
     mujoco.mj_kinematics(m, d)
     # carriage frame starts 0.2 m along the arm (+X); rotating +90 deg about +Y takes +X to -Z
     np.testing.assert_allclose(d.body("carriage").xpos, [0, 0, 0.10], atol=1e-9)
+
+
+class DofFakeClient(FakeClient):
+    """Same parts, but using the dof_ convention: an alignment mate between links must be ignored,
+    a pattern copy must stick to its seed, and a mate to the assembly origin must be skipped."""
+
+    def get(self, path, params=None, binary=False):
+        if path.endswith("/features"):
+            return {"features": []}
+        if "/assemblies/" in path and not path.endswith("/features"):
+            a = json.loads(json.dumps(ASSEMBLY))
+            ra = a["rootAssembly"]
+            ra["instances"].append(part("i_copy", "Post copy", "JB"))
+            ra["occurrences"].append({"path": ["i_copy"], "transform": T((0.1, 0, 0.05))})
+            ra["patterns"] = [{"id": "P1", "suppressed": False, "seedToPatternInstances": {"i_post": ["i_copy"]}}]
+            f = ra["features"]
+            f[1]["featureData"]["name"] = "dof_shoulder_inv"
+            f[2]["featureData"]["name"] = "Carriage slide"  # not dof_: must NOT become a joint
+            f.append(mate("f4", "Parallel 1", "PARALLEL", ["i_arm"], cs((0, 0, 0)), ["i_plate"], cs((0, 0, 0))))
+            f.append({"id": "f5", "featureType": "mate", "suppressed": False, "featureData": {
+                "name": "Fastened origin", "mateType": "FASTENED",
+                "matedEntities": [{"matedOccurrence": [], "matedCS": cs((0, 0, 0))},
+                                  {"matedOccurrence": ["i_plate"], "matedCS": cs((0, 0, 0))}]}})
+            return a
+        return super().get(path, params, binary)
+
+
+def test_dof_convention_patterns_and_origin_mates():
+    r = onshape.build_from_onshape({"source": URL}, None, client=DofFakeClient())
+    assert list(r.joints) == ["shoulder"]  # only the dof_ mate; "_inv" stripped from the name
+    np.testing.assert_allclose(r.joints["shoulder"].axis, [0, -1, 0], atol=1e-12)  # _inv flips the axis
+    assert r.joints["shoulder"].child == "arm"
+    base = {p.name.split("/")[1] for p in r.links["base_link"].parts}
+    assert {"post", "post_copy"} <= base  # pattern copy rigid with its seed
+    assert any("single entity" in x for x in r.review)

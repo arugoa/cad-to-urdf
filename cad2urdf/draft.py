@@ -48,6 +48,11 @@ GEAR_NAME = re.compile(r"(?<![a-z])\d+t(?![a-z])|gear|pinion|pulley|sprocket", r
 # Hobby/robot servos: the part includes its output horn, so it touches both the mount and the driven part.
 SERVO_NAME = re.compile(r"sts\d{4}|scs\d{2,4}|sm\d{2}bl|xl-?\d{3}|xm-?\d{3}|xh-?\d{3}|xc-?\d{3}|xw-?\d{3}|"
                         r"ax-?1[28]|mx-?\d{2}|dynamixel|feetech|servo|lx-?\d{3}|mg9\d{2}|ds3\d{3}", re.I)
+# Fasteners never form a joint by themselves: they are clamped to what they pass through (a screw in a
+# 3.2 mm clearance hole otherwise looks like a shaft in a bearing). Used as an axle through a bearing,
+# the joint comes from the bearing's inner race instead.
+FASTENER_NAME = re.compile(r"screw|bolt|nut(?![a-z])|washer|rivet|standoff|dowel|insert|locknut|set_?screw|"
+                           r"(?<![a-z])(shcs|bhcs|fhcs|msb\d+)", re.I)
 # Placeholder geometry that is not part of the physical robot (keep-out volumes, reference bodies).
 IGNORE_HINT = re.compile(r"no.?blockage|keep.?out|zone|envelope|reference|clearance.?vol|dummy|placeholder", re.I)
 
@@ -189,6 +194,25 @@ HORN_DOMINANCE = 0.6
 MAX_INCIDENTAL = 40
 
 
+def _classify_fits(cands, rings, press_fit_tol, max_running_clearance, part_link=None):
+    """Split clearance fits into real running fits and ones that are rigid by construction:
+    a bearing's outer race in its housing, or a fastener in a clearance hole (unless the hole is a bearing
+    bore, where the bearing rule makes the joint). Candidates carry "shaft->bore" part names as evidence."""
+    running, fixed = [], []
+    for c in cands:
+        if not (press_fit_tol < c.clearance <= max_running_clearance):
+            continue
+        pairs = [e.split("->") for e in c.evidence if "->" in e]
+        shafts = {a for a, _ in pairs}
+        bores = {b.split(" ")[0] for _, b in pairs}
+        if shafts & set(rings) or any(FASTENER_NAME.search(a) for a in shafts) and not bores & set(rings):
+            if part_link is None:  # part-level pass: link names are part names
+                fixed.append(c)
+            continue
+        running.append(c)
+    return running, fixed
+
+
 def _contact_strength(a: cad.Part, b: cad.Part, tol_cad: float) -> float:
     """Contact strength ~ number of overlapping faces on both sides (firm mounts share many faces;
     a folded arm resting on its base touches along a few)."""
@@ -227,12 +251,11 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
         p.link = p.name  # every part its own "link" for candidate search
         p.density = 1000.0
         cad.mass_properties(p, scale)
-    cands = infer_joints(parts, scale)
-    running = [c for c in cands if press_fit_tol < c.clearance <= max_running_clearance]
-    running_pairs = {tuple(sorted((c.link_a, c.link_b))) for c in running}
-
     by_name = {p.name: p for p in parts}
     rings = {p.name: r for p in parts if BEARING_NAME.search(p.name) and (r := _annulus(p, scale))}
+    cands = infer_joints(parts, scale)
+    running, forced_fixed = _classify_fits(cands, rings, press_fit_tol, max_running_clearance)
+    running_pairs = {tuple(sorted((c.link_a, c.link_b))) for c in running}
     gears = {p.name for p in parts if GEAR_NAME.search(p.name)}
     inner_of: dict[str, set[str]] = defaultdict(set)  # bearing/servo -> parts on its rotating side
     servos = {}
@@ -289,6 +312,8 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
     for c in cands:  # press fits: never cut
         if c.clearance <= press_fit_tol and fixed(c.link_a, c.link_b):
             G.add_edge(c.link_a, c.link_b, capacity=1e9)
+    for c in forced_fixed:  # fasteners in clearance holes, bearing outer races in housings
+        G.add_edge(c.link_a, c.link_b, capacity=1e9)
 
     # Constraint: a servo/bearing and the parts on its rotating side must end up in different links.
     # CAD is often saved in a folded/posed configuration where links rest against each other; those
@@ -359,7 +384,8 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
     # pin's press-fit length counts as held, not free (revolute vs cylindrical)
     for p in parts:
         p.link = uf.find(p.name)
-    running = [c for c in infer_joints(parts, scale) if press_fit_tol < c.clearance <= max_running_clearance]
+    running, _ = _classify_fits(infer_joints(parts, scale), rings, press_fit_tol, max_running_clearance,
+                                part_link={p.name: p.link for p in parts})
 
     welded = []
     for brg, inners in inner_of.items():
