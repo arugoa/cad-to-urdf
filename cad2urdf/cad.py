@@ -27,6 +27,7 @@ class Part:
     inertia: np.ndarray = field(default_factory=lambda: np.zeros((3, 3)))  # about COM
     volume: float = 0.0  # m^3
     mesh: trimesh.Trimesh | None = None  # world frame, metres
+    skipped_faces: int = 0  # faces that failed to triangulate
 
 
 def load_parts(step_path: Path) -> list[Part]:
@@ -77,9 +78,40 @@ def mass_properties(part: Part, unit_scale: float) -> None:
 
 
 def tessellate(part: Part, unit_scale: float, linear_mm: float, angular_deg: float) -> None:
+    """Mesh the part with OpenCascade, face by face.
+
+    Faces that fail to triangulate (degenerate faces in real exports) are skipped and counted in
+    ``part.skipped_faces`` instead of aborting the whole conversion.
+    """
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.TopoDS import TopoDS
+
     lin = linear_mm * 1e-3 / unit_scale  # tolerance expressed in CAD units
-    verts, tris = part.shape.tessellate(lin, np.radians(angular_deg))
-    v = np.array([[p.X, p.Y, p.Z] for p in verts]) * unit_scale
-    mesh = trimesh.Trimesh(v, np.array(tris), process=True)
+    BRepMesh_IncrementalMesh(part.shape.wrapped, lin, False, np.radians(angular_deg), True)
+    verts, tris, skipped, offset = [], [], 0, 0
+    exp = TopExp_Explorer(part.shape.wrapped, TopAbs_FACE)
+    while exp.More():
+        face = TopoDS.Face(exp.Current())
+        exp.Next()
+        loc = TopLoc_Location()
+        poly = BRep_Tool.Triangulation_s(face, loc)
+        if poly is None or poly.NbTriangles() == 0:
+            skipped += 1
+            continue
+        trsf = loc.Transformation()
+        pts = [poly.Node(i).Transformed(trsf) for i in range(1, poly.NbNodes() + 1)]
+        verts += [(p.X(), p.Y(), p.Z()) for p in pts]
+        rev = face.Orientation() == TopAbs_REVERSED
+        for i in range(1, poly.NbTriangles() + 1):
+            a, b, c = poly.Triangle(i).Get()
+            tris.append((a - 1 + offset, c - 1 + offset, b - 1 + offset) if rev else (a - 1 + offset, b - 1 + offset, c - 1 + offset))
+        offset += poly.NbNodes()
+    mesh = trimesh.Trimesh(np.array(verts) * unit_scale, np.array(tris), process=True)
+    mesh.merge_vertices()
     mesh.fix_normals()
     part.mesh = mesh
+    part.skipped_faces = skipped
