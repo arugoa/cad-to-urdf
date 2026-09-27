@@ -173,7 +173,7 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
     """Flatten the assembly: leaf part occurrences (world frames) + mates (global paths) + relations."""
     try:
         asm = client.get(f"/api/v10/assemblies/d/{ref['did']}/{ref['wvm']}/{ref['wvmid']}/e/{ref['eid']}",
-                         {"includeMateFeatures": "true", "includeMateConnectors": "true", "includeNonSolids": "false"})
+                         {"includeMateFeatures": "true", "includeMateConnectors": "true", "includeNonSolids": "true"})
     except RuntimeError as e:
         if "must be an assembly" not in str(e):
             raise
@@ -188,6 +188,19 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
     # linked-document parts must be fetched through the linked *version*; parts[] carries it
     versions = {(q["documentId"], q["elementId"], q["partId"]): q.get("documentVersion")
                 for q in asm.get("parts", []) if q.get("documentVersion")}
+    # keep solid and composite parts (a composite groups several bodies into one real part);
+    # skip sheets/wires, and parts that are only reference-frame markers (mated via "frame_*" mates)
+    body_type = {(q["documentId"], q["elementId"], q["partId"]): q.get("bodyType", "solid")
+                 for q in asm.get("parts", [])}
+    in_frame, in_other = set(), set()
+    for d in [root, *asm.get("subAssemblies", [])]:
+        for f in d["features"]:
+            if f["featureType"] != "mate":
+                continue
+            ids = {e["matedOccurrence"][-1] for e in f["featureData"].get("matedEntities", [])
+                   if e.get("matedOccurrence")}  # empty path = mated to the assembly origin
+            (in_frame if f["featureData"].get("name", "").lower().startswith("frame_") else in_other).update(ids)
+    frame_ids = in_frame - in_other  # parts attached ONLY through frame_* mates are markers
     occ_fixed = {tuple(o["path"]) for o in root["occurrences"] if o.get("fixed")}
     occs: dict[tuple, Occ] = {}
     mates: list[Mate] = []
@@ -206,6 +219,9 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
                 named_rigid = any(re.search(p, inst["name"], re.I) for p in rigid_patterns)
                 walk(sub, path, rigid if rigid else (path if (named_rigid or not flexible) else None))
             elif inst["type"] == "Part":
+                bt = body_type.get((inst["documentId"], inst["elementId"], inst["partId"]), "solid")
+                if bt not in ("solid", "composite") or inst["id"] in frame_ids:
+                    continue
                 part = dict(inst)
                 v = versions.get((inst["documentId"], inst["elementId"], inst["partId"]))
                 if v and not part.get("documentVersion"):
@@ -217,12 +233,20 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
             d = f["featureData"]
             if f["featureType"] == "mate":
                 ents = d["matedEntities"]
+                ents = [e for e in ents if e.get("matedOccurrence")]  # drop "mated to origin" entities
                 mates.append(Mate(d.get("name", f["id"]), f["id"], d["mateType"],
                                   [prefix + tuple(e["matedOccurrence"]) for e in ents], [_cs(e["matedCS"]) for e in ents]))
             elif f["featureType"] == "mateRelation":
                 relations.append({**d, "prefix": prefix})
             elif f["featureType"] == "mateGroup":
                 groups.append([prefix + tuple(o["occurrence"]) for o in d.get("occurrences", [])])
+        # Instance patterns: copies are placed rigidly relative to their seed and carry no mates of their own
+        for pat in defn.get("patterns", []):
+            if pat.get("suppressed"):
+                continue
+            for seed, copies in pat.get("seedToPatternInstances", {}).items():
+                for cp in copies:
+                    groups.append([prefix + (seed,), prefix + (cp,)])
 
     walk(root, (), None)
     by_id = {m.feature_id: m for m in mates}
@@ -308,11 +332,23 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
     # mate-connector-only instances) are not physical joints: skip and report them
     kept = []
     for m in mates:
-        if all(leaves_under(p) for p in m.occ):
+        if len(m.occ) < 2:
+            review.append(f"mate {m.name}: has a single entity (mated to the origin/assembly); ignored")
+        elif all(leaves_under(p) for p in m.occ):
             kept.append(m)
         else:
             review.append(f"mate {m.name}: references a non-solid or missing instance; ignored")
     mates = kept
+
+    # Naming convention: if the designer marked joints with a "dof_" prefix (as many robot CAD
+    # workflows do), only those mates are joints; other revolute/slider mates just align screws,
+    # standoffs etc. and are treated as fixed. A "_inv" suffix flips the axis.
+    use_dof = any(m.name.lower().startswith("dof_") for m in mates)
+    if use_dof:
+        n_other = sum(1 for m in mates if not m.name.lower().startswith("dof_")
+                      and m.type in ("REVOLUTE", "SLIDER", "CYLINDRICAL", "PIN_SLOT"))
+        review.append(f"'dof_' naming found: only dof_* mates are joints; all other mates hold parts rigidly "
+                      f"({n_other} of them are revolute/slider-type)")
 
     uf = _UF()
     for p, o in occs.items():
@@ -326,6 +362,11 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
     moving = []
     for m in mates:
         a, b = rep(m.occ[0]), rep(m.occ[1])
+        if use_dof and not m.name.lower().startswith("dof_"):
+            # the designer declared the moving mates; every other mate (planar, parallel, revolute used
+            # to align a screw, ...) holds parts in place
+            uf.union(a, b)
+            continue
         if m.type == "FASTENED":
             uf.union(a, b)
         elif m.type in ("REVOLUTE", "SLIDER", "CYLINDRICAL", "PIN_SLOT"):
@@ -407,7 +448,9 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             c = 1 - side  # index of this (child) side in the mate
             F = [occ_T[m.occ[k]] @ m.cs[k] for k in (0, 1)]  # both mate frames in world
             axis_w = F[0][:3, 2]
-            jname = _key(m.name)
+            raw = m.name[4:] if m.name.lower().startswith("dof_") else m.name
+            flip = raw.lower().endswith("_inv")
+            jname = _key(raw[:-4] if flip else raw)
             while jname in joints:
                 jname += "_"
             jtype = "prismatic" if m.type == "SLIDER" else "revolute"
@@ -433,6 +476,9 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
                 lo, hi = -0.1, 0.1
                 review.append(f"joints.{jname}: slider without limits in Onshape; placeholder +/-0.1 m")
             Tj = F[c]
+            if flip:  # "_inv": same motion, measured the other way round
+                axis_w = -axis_w
+                lo, hi = (-hi if hi is not None else None), (-lo if lo is not None else None)
             ov = overrides.get(jname, {})
             lo, hi = ov.get("limits", [lo if lo is not None else 0.0, hi if hi is not None else 0.0])
             joints[jname] = Joint(

@@ -119,4 +119,7 @@ def collision_study(robot: model.Robot) -> dict:
 
 
 if __name__ == "__main__":
+    from cad2urdf.safety import sandbox
+
+    sandbox("cad2urdf")
     main()

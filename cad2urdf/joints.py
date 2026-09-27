@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from build123d import GeomType
+from OCP.BRepAdaptor import BRepAdaptor_Surface
 
 from .cad import Part
 
@@ -78,11 +79,18 @@ def _canonical(direction: np.ndarray) -> np.ndarray:
 def cylindrical_faces(part: Part, unit_scale: float) -> list[CylFace]:
     faces = []
     for f in part.shape.faces():
-        if f.geom_type != GeomType.CYLINDER or f.radius is None:
-            continue  # radius None: a converted/approximated surface flagged as cylindrical
-        axis = f.axis_of_rotation
-        p0 = _v(axis.position) * unit_scale
-        d = _canonical(_v(axis.direction))
+        if f.geom_type != GeomType.CYLINDER:
+            continue
+        # read the analytic cylinder from OpenCascade directly: build123d's Face.radius returns None
+        # for many exported cylinders (e.g. every bearing race in a SolidWorks->Onshape->STEP chassis)
+        try:
+            cyl = BRepAdaptor_Surface(f.wrapped).Cylinder()
+        except Exception:  # noqa: BLE001  (not an analytic cylinder after all)
+            continue
+        ax = cyl.Axis()
+        radius = cyl.Radius()
+        p0 = np.array([ax.Location().X(), ax.Location().Y(), ax.Location().Z()]) * unit_scale
+        d = _canonical(np.array([ax.Direction().X(), ax.Direction().Y(), ax.Direction().Z()]))
         # project the axis point to the foot of the perpendicular from the world origin
         p0 = p0 - np.dot(p0, d) * d
         verts = np.array([_v(v) for v in f.vertices()]).reshape(-1, 3) * unit_scale
@@ -94,7 +102,7 @@ def cylindrical_faces(part: Part, unit_scale: float) -> list[CylFace]:
         n = _v(f.normal_at(f.center()))
         radial = c - (p0 + np.dot(c, d) * d)
         convex = float(np.dot(n, radial)) > 0
-        faces.append(CylFace(part.name, part.link, f.radius * unit_scale, p0, d, t.min(), t.max(), convex))
+        faces.append(CylFace(part.name, part.link, radius * unit_scale, p0, d, t.min(), t.max(), convex))
     return faces
 
 
