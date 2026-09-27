@@ -103,6 +103,15 @@ class Robot:
     materials: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_RGBA))  # name -> "r g b a"
     floating_base: bool = False
 
+    def used_materials(self) -> dict[str, str]:
+        """Every material a visual references, with a colour (neutral grey for ones not in ``materials``,
+        e.g. the "default" material of a drafted STEP spec)."""
+        out = dict(self.materials)
+        for link in self.links.values():
+            for key in link.visuals:
+                out.setdefault(link.material(key), "0.7 0.7 0.72 1")
+        return out
+
     def child_in_parent(self, j: "Joint") -> tuple[np.ndarray, np.ndarray]:
         """(xyz, R) of the child link frame expressed in the parent link frame."""
         p, c = self.links[j.parent], self.links[j.child]
