@@ -46,9 +46,41 @@ def budget_mesh(mesh, max_faces: int = MAX_VISUAL_FACES):
     return out if len(out.faces) else mesh
 
 
+def split_heavy_visuals(robot: Robot, max_faces: int = MAX_VISUAL_FACES) -> None:
+    """Split any visual mesh over ``max_faces`` into several files, packing whole parts together.
+
+    Decimation can't shrink a link fused from ~1,000 small parts (quadric decimation stalls at ~1M
+    triangles on the Infantry chassis), and MuJoCo rejects any STL over 200,000 triangles. Several meshes
+    per body load fine everywhere. A single part that is itself over budget is decimated alone.
+    """
+    import trimesh
+
+    for link in robot.links.values():
+        new, mats = {}, {}
+        for key, mesh in link.visuals.items():
+            if len(mesh.faces) <= max_faces:
+                new[key], mats[key] = mesh, link.material(key)
+                continue
+            chunks, cur, n = [], [], 0
+            for comp in sorted(mesh.split(only_watertight=False), key=lambda c: -len(c.faces)):
+                comp = budget_mesh(comp, max_faces)
+                if n + len(comp.faces) > max_faces and cur:
+                    chunks.append(cur)
+                    cur, n = [], 0
+                cur.append(comp)
+                n += len(comp.faces)
+            if cur:
+                chunks.append(cur)
+            for i, ch in enumerate(chunks):
+                new[f"{key}_{i}"] = trimesh.util.concatenate(ch)
+                mats[f"{key}_{i}"] = link.material(key)
+        link.visuals, link.visual_materials = new, mats
+
+
 def export_meshes(robot: Robot, mesh_dir: Path) -> None:
     (mesh_dir / "visual").mkdir(parents=True, exist_ok=True)
     (mesh_dir / "collision").mkdir(parents=True, exist_ok=True)
+    split_heavy_visuals(robot)
     for link in robot.links.values():
         for mat, mesh in link.visuals.items():
             budget_mesh(mesh).export(mesh_dir / "visual" / f"{link.name}_{mat}.stl")
