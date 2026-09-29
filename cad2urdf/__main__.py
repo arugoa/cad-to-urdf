@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import collision, mjcf, model, simplify, srdf, targets, urdf
+from . import geometry, model, writers
 
 
 def main(argv=None):
@@ -33,38 +33,38 @@ def main(argv=None):
 
     cfg = robot.spec.get("simplify", {})
     if cfg is not False:
-        rep = simplify.simplify_robot(robot, cfg.get("drop_fasteners", True), cfg.get("visual_faces_per_link", 20000))
+        rep = geometry.simplify_robot(robot, cfg.get("drop_fasteners", True), cfg.get("visual_faces_per_link", 20000))
         before, after = sum(r["faces_before"] for r in rep.values()), sum(r["faces_after"] for r in rep.values())
         print(f"   simplified visuals: {before:,} -> {after:,} triangles, "
               f"{sum(r['dropped'] for r in rep.values())} fasteners dropped")
 
     print("2/6 collision geometry")
-    collision.build_collisions(robot)
+    geometry.build_collisions(robot)
 
     print("3/6 meshes + URDF")
-    urdf.export_meshes(robot, out / "meshes")
-    urdf.write_urdf(robot, out / f"{robot.name}.urdf", mesh_prefix="meshes")
-    urdf.write_urdf(robot, out / "gazebo" / f"{robot.name}.gazebo.urdf",
+    writers.export_meshes(robot, out / "meshes")
+    writers.write_urdf(robot, out / f"{robot.name}.urdf", mesh_prefix="meshes")
+    writers.write_urdf(robot, out / "gazebo" / f"{robot.name}.gazebo.urdf",
                     mesh_prefix=f"package://{robot.name}_description/meshes", flavour="gazebo")
 
     print("4/6 SRDF (sampled self-collision matrix)")
     s = robot.spec.get("srdf", {})
     samples = args.samples or s.get("collision_samples", 5000)
-    disabled, stats = srdf.collision_matrix(robot, out / "meshes", samples=samples)
-    srdf.build_srdf(robot, disabled).write(out / f"{robot.name}.srdf", encoding="unicode", xml_declaration=True)
+    disabled, stats = writers.collision_matrix(robot, out / "meshes", samples=samples)
+    writers.build_srdf(robot, disabled).write(out / f"{robot.name}.srdf", encoding="unicode", xml_declaration=True)
 
     print("5/6 MJCF + Isaac Lab / ManiSkill / Gazebo side files")
     # MuJoCo doesn't filter parent/child contacts when the parent is welded to the world
     excludes = [p for p, r in disabled.items() if r in ("Adjacent", "Default", "Always")]
     keyframes = {}
     for name, st in s.get("group_states", {}).items():
-        keyframes[name] = srdf.expand_mimic(robot, {**{j: 0.0 for j in robot.joints}, **st["joints"]})
-    mjcf.write_mjcf(robot, out / "mjcf" / f"{robot.name}.xml", meshdir="../meshes", excludes=excludes,
+        keyframes[name] = writers.expand_mimic(robot, {**{j: 0.0 for j in robot.joints}, **st["joints"]})
+    writers.write_mjcf(robot, out / "mjcf" / f"{robot.name}.xml", meshdir="../meshes", excludes=excludes,
                     keyframes=keyframes)
-    targets.write_targets(robot, out)
+    writers.write_targets(robot, out)
 
     print("6/6 report + joint-limit sweep")
-    from .sweep import limit_sweep
+    from .geometry import limit_sweep
 
     sweep = limit_sweep(robot)
     for jn in sweep["limits_driving_into_parent"]:
@@ -114,8 +114,8 @@ def collision_study(robot: model.Robot) -> dict:
         for cfg in STUDY_MODES:
             label = cfg["mode"] + (f"@{cfg['threshold']}" if "threshold" in cfg else "")
             t = time.time()
-            link.collisions = collision.link_collisions(link, cfg, max_v)
-            m = collision.metrics(link)
+            link.collisions = geometry.link_collisions(link, cfg, max_v)
+            m = geometry.metrics(link)
             m["seconds"] = round(time.time() - t, 2)
             rows[label] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in m.items()}
         link.collisions, link.collision_mode, link.collision_metrics = keep
@@ -124,7 +124,7 @@ def collision_study(robot: model.Robot) -> dict:
 
 
 if __name__ == "__main__":
-    from cad2urdf.safety import sandbox
+    from cad2urdf.util import sandbox
 
     sandbox("cad2urdf")
     main()

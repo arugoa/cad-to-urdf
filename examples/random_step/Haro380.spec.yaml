@@ -1,5 +1,5 @@
 # Haro380 arm, spec written by hand: the draft can't see its joint modules (no shaft/bore fits).
-# Links follow the part names; axis/origin (mm) come from `python -m cad2urdf.inspect_step Haro380.step`.
+# Links follow the part names; axis/origin (mm) come from `python -m cad2urdf.step Haro380.step`.
 # Limits are placeholders.
 robot: haro380
 source: Haro380.step

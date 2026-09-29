@@ -82,8 +82,8 @@ Link and joint names come from part names. Rename them by editing the draft into
 Signs: one giant link, joints that each move a single small solid, or `0 joints` on something that obviously moves. This happens when the CAD doesn't model the joint as a shaft in a bore. Common cases: motors or joint modules butted flat against a link, pivots modelled at zero clearance, V-wheel slides. Do not guess axes. Get them from the geometry:
 
 ```bash
-python -m cad2urdf.inspect_step robot.step                  # solids grouped by part name
-python -m cad2urdf.inspect_step robot.step --spec spec.yaml # grouped by your links
+python -m cad2urdf.step robot.step                  # solids grouped by part name
+python -m cad2urdf.step robot.step --spec spec.yaml # grouped by your links
 ```
 
 For each pair of part groups it prints the touching solids and every *shared axis*: coaxial cylindrical faces on both sides, at any radius or clearance, with spec-ready `axis:` / `origin:` (CAD units).

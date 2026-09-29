@@ -326,7 +326,7 @@ def main():
 
 
 if __name__ == "__main__":
-    from cad2urdf.safety import sandbox
+    from cad2urdf.util import sandbox
 
     import os
     import sys

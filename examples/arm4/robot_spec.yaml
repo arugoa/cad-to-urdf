@@ -9,7 +9,7 @@
 #   * what MoveIt/SRDF semantics to emit (groups, poses, end effector)
 #
 # Anything omitted is inferred: joint axes/origins come from coaxial
-# shaft/bore detection in the B-rep (see cad2urdf/joints.py), masses and
+# shaft/bore detection in the B-rep (see cad2urdf/step.py), masses and
 # inertias from B-rep volume x material density.
 
 robot: arm4

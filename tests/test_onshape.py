@@ -6,7 +6,7 @@ import json
 import numpy as np
 import trimesh
 
-from cad2urdf import onshape
+from cad2urdf import frontends
 
 DID, WID, EID = "a" * 24, "b" * 24, "c" * 24
 URL = f"https://team.onshape.com/documents/{DID}/w/{WID}/e/{EID}"
@@ -91,7 +91,7 @@ class FakeClient:
 
 
 def test_onshape_mates_become_links_and_joints():
-    r = onshape.build_from_onshape({"source": URL}, None, client=FakeClient())
+    r = frontends.build_from_onshape({"source": URL}, None, client=FakeClient())
     assert sorted(r.links) == ["arm", "base_link", "carriage"]  # plate + post fastened into one link
     sh = r.joints["shoulder"]
     assert (sh.type, sh.parent, sh.child) == ("revolute", "base_link", "arm")
@@ -109,21 +109,21 @@ def test_onshape_mates_become_links_and_joints():
 
 
 def test_quantity_parsing():
-    assert abs(onshape.parse_quantity("90 deg") - np.pi / 2) < 1e-12
-    assert abs(onshape.parse_quantity("-12.5 mm") + 0.0125) < 1e-12
-    assert onshape.parse_quantity("1 in") == 0.0254
-    assert onshape.parse_url(URL)["host"] == "team.onshape.com"
+    assert abs(frontends.parse_quantity("90 deg") - np.pi / 2) < 1e-12
+    assert abs(frontends.parse_quantity("-12.5 mm") + 0.0125) < 1e-12
+    assert frontends.parse_quantity("1 in") == 0.0254
+    assert frontends.parse_url(URL)["host"] == "team.onshape.com"
 
 
 def test_onshape_robot_compiles_and_loads(tmp_path):
     import mujoco
 
-    from cad2urdf import collision, mjcf, urdf
+    from cad2urdf import geometry, writers
 
-    r = onshape.build_from_onshape({"source": URL}, None, client=FakeClient())
-    collision.build_collisions(r, with_metrics=False)
-    urdf.export_meshes(r, tmp_path / "meshes")
-    mjcf.write_mjcf(r, tmp_path / "mjcf" / "r.xml", meshdir="../meshes")
+    r = frontends.build_from_onshape({"source": URL}, None, client=FakeClient())
+    geometry.build_collisions(r, with_metrics=False)
+    writers.export_meshes(r, tmp_path / "meshes")
+    writers.write_mjcf(r, tmp_path / "mjcf" / "r.xml", meshdir="../meshes")
     m = mujoco.MjModel.from_xml_path(str(tmp_path / "mjcf" / "r.xml"))
     d = mujoco.MjData(m)
     d.qpos[0] = np.pi / 2  # shoulder
@@ -158,7 +158,7 @@ class DofFakeClient(FakeClient):
 
 
 def test_dof_convention_patterns_and_origin_mates():
-    r = onshape.build_from_onshape({"source": URL}, None, client=DofFakeClient())
+    r = frontends.build_from_onshape({"source": URL}, None, client=DofFakeClient())
     assert list(r.joints) == ["shoulder"]  # only the dof_ mate; "_inv" stripped from the name
     np.testing.assert_allclose(r.joints["shoulder"].axis, [0, -1, 0], atol=1e-12)  # _inv flips the axis
     assert r.joints["shoulder"].child == "arm"
@@ -183,18 +183,18 @@ class ClosingFakeClient(FakeClient):
 def test_closing_mate_becomes_loop_constraint(tmp_path):
     import mujoco
 
-    from cad2urdf import collision, mjcf, urdf
+    from cad2urdf import geometry, writers
 
     spec = {"source": URL, "actuators": {"default": {"kind": "position", "kp": 50, "kv": 1}}}
-    r = onshape.build_from_onshape(spec, None, client=ClosingFakeClient())
+    r = frontends.build_from_onshape(spec, None, client=ClosingFakeClient())
     assert sorted(r.joints) == ["carriage_slide", "shoulder"]  # the closing mate is not a tree joint
     (c,) = r.closures
     assert {c["link1"], c["link2"]} == {"carriage", "base_link"}
     assert r.joints["shoulder"].actuator.get("kind") == "position"  # on the base: the motor
     assert r.joints["carriage_slide"].actuator == {"kind": "none"}  # inside the loop: passive
-    collision.build_collisions(r, with_metrics=False)
-    urdf.export_meshes(r, tmp_path / "meshes")
-    mjcf.write_mjcf(r, tmp_path / "mjcf" / "r.xml", meshdir="../meshes")
+    geometry.build_collisions(r, with_metrics=False)
+    writers.export_meshes(r, tmp_path / "meshes")
+    writers.write_mjcf(r, tmp_path / "mjcf" / "r.xml", meshdir="../meshes")
     m = mujoco.MjModel.from_xml_path(str(tmp_path / "mjcf" / "r.xml"))
     assert m.neq == 1 and m.eq_type[0] == mujoco.mjtEq.mjEQ_CONNECT and m.nu == 1
     d = mujoco.MjData(m)
@@ -208,7 +208,7 @@ def test_closing_mate_becomes_loop_constraint(tmp_path):
 
 def test_joint_name_conventions_for_actuators():
     spec = {"actuators": {"default": {"kind": "position", "kp": 100, "kv": 5}, "wheel2_passive3": {"kind": "position", "kp": 1}}}
-    assert onshape._named_actuator("wheel1_passive7", spec) == {"kind": "none"}  # free roller
-    assert onshape._named_actuator("wheel1_speed", spec)["kind"] == "velocity"  # drive wheel
-    assert onshape._named_actuator("left_knee", spec)["kind"] == "position"
-    assert onshape._named_actuator("wheel2_passive3", spec)["kp"] == 1  # an explicit spec entry wins
+    assert frontends._named_actuator("wheel1_passive7", spec) == {"kind": "none"}  # free roller
+    assert frontends._named_actuator("wheel1_speed", spec)["kind"] == "velocity"  # drive wheel
+    assert frontends._named_actuator("left_knee", spec)["kind"] == "position"
+    assert frontends._named_actuator("wheel2_passive3", spec)["kp"] == 1  # an explicit spec entry wins

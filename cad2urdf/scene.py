@@ -20,8 +20,8 @@ from pathlib import Path
 import numpy as np
 import trimesh
 
-from . import cad
-from .collision import _cap_vertices, _coacd, proper_frame
+from .geometry import _cap_vertices, _coacd, proper_frame
+from .step import UNIT_TO_M
 from .model import CollisionGeom
 from .util import fmt, quat, rpy
 
@@ -37,7 +37,7 @@ class Leaf:
 def load_leaves(step: Path, units: str, lin_mm: float = 2.0, ang_rad: float = 0.3) -> list[Leaf]:
     from build123d import import_step
 
-    scale = cad.UNIT_TO_M[units]
+    scale = UNIT_TO_M[units]
     root = import_step(str(step))
     out = []
 
@@ -331,7 +331,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    from cad2urdf.safety import sandbox
+    from cad2urdf.util import sandbox
 
     sandbox("cad2urdf.scene")
     sys.exit(main())

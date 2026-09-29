@@ -10,7 +10,7 @@
 # - CPU: nice 19, so idle cores are used but other apps win.
 set -euo pipefail
 total_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-# same default as cad2urdf/safety.py: leave half the RAM (at least 5 GB) to the desktop
+# same default as cad2urdf/util.py: leave half the RAM (at least 5 GB) to the desktop
 reserve_kb=$(( total_kb / 2 )); (( reserve_kb < 5 * 1024 * 1024 )) && reserve_kb=$(( 5 * 1024 * 1024 ))
 [ -n "${CAD2URDF_RESERVE_GB:-${RESERVE_GB:-}}" ] && reserve_kb=$(awk -v g="${CAD2URDF_RESERVE_GB:-$RESERVE_GB}" 'BEGIN{printf "%d", g*1024*1024}')
 cap_kb=$(( total_kb - reserve_kb ))

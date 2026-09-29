@@ -12,8 +12,7 @@ import numpy as np
 import trimesh
 import yaml
 
-from . import cad
-from .joints import JointCandidate, infer_joints
+from .step import UNIT_TO_M, JointCandidate, Part, infer_joints, load_parts, mass_properties, tessellate
 
 
 DEFAULT_RGBA = {
@@ -35,7 +34,7 @@ class CollisionGeom:
 @dataclass
 class Link:
     name: str
-    parts: list[cad.Part] = field(default_factory=list)
+    parts: list[Part] = field(default_factory=list)
     origin: np.ndarray = field(default_factory=lambda: np.zeros(3))  # world, zero config
     rotation: np.ndarray = field(default_factory=lambda: np.eye(3))  # world, zero config
     mass: float = 0.0
@@ -193,7 +192,7 @@ def _per(spec_section: dict, key: str) -> dict:
     return out
 
 
-def combine_inertia(parts: list[cad.Part], frame_origin: np.ndarray):
+def combine_inertia(parts: list[Part], frame_origin: np.ndarray):
     """Total mass, COM (link frame) and inertia about the COM via the parallel-axis theorem."""
     mass = sum(p.mass for p in parts)
     com_world = sum(p.mass * p.com for p in parts) / mass
@@ -224,18 +223,18 @@ def build(spec_path: Path) -> Robot:
     spec = yaml.safe_load(Path(spec_path).read_text())
     base = Path(spec_path).parent
     if str(spec["source"]).startswith("http"):
-        from .onshape import build_from_onshape
+        from .frontends import build_from_onshape
 
         return build_from_onshape(spec, base)
     if str(spec["source"]).lower().endswith(".urdf"):
-        from .ingest import build_from_urdf
+        from .frontends import build_from_urdf
 
         return build_from_urdf(spec, base)
-    scale = cad.UNIT_TO_M[spec.get("units", "mm")]
+    scale = UNIT_TO_M[spec.get("units", "mm")]
     tess = spec.get("visual", {}).get("tessellation", {})
 
     # 1. parts, materials, link assignment
-    parts = cad.load_parts(base / spec["source"])
+    parts = load_parts(base / spec["source"])
     ignore = spec.get("ignore_parts", [])  # placeholder geometry: keep-out zones, reference bodies
     parts = [p for p in parts if not any(fnmatch.fnmatch(p.name, pat) for pat in ignore)]
     link_of = {}
@@ -252,8 +251,8 @@ def build(spec_path: Path) -> Robot:
         p.link = link_of[p.name]
         p.material = _match(p.name, spec["part_materials"]) or "aluminum"
         p.density = spec["materials"][p.material]
-        cad.mass_properties(p, scale)
-        cad.tessellate(p, scale, tess.get("linear_mm", 0.2), tess.get("angular_deg", 10))
+        mass_properties(p, scale)
+        tessellate(p, scale, tess.get("linear_mm", 0.2), tess.get("angular_deg", 10))
 
     links = {name: Link(name) for name in spec["links"]}
     for p in parts:
