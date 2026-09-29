@@ -294,7 +294,7 @@ Build a graph (nodes = parts, edges = fixed relations: fastened/rigid/lock mates
 - Visual meshes of assemblies contain thousands of small parts (fasteners, cables) that add contacts, not fidelity.
 - Adjacent links interpenetrate at joints by design (shaft in bore), which is why the SRDF/exclude list matters.
 
-### 5.2 Modes (implemented in `cad2urdf/collision.py`)
+### 5.2 Modes (implemented in `cad2urdf/geometry.py`)
 
 | Mode | Description | Good for |
 |---|---|---|
@@ -346,7 +346,7 @@ Takeaways
 
 ### 5.6 Self-collision matrix (SRDF)
 
-Implemented MoveIt-style (`cad2urdf/srdf.py`). Collision geometry is compiled into a MuJoCo model with `filterparent` disabled. Then 5,000 random configurations (mimic joints expanded) are sampled, and each pair is classified:
+Implemented MoveIt-style (`cad2urdf/writers.py`). Collision geometry is compiled into a MuJoCo model with `filterparent` disabled. Then 5,000 random configurations (mimic joints expanded) are sampled, and each pair is classified:
 - Adjacent: joined by a joint.
 - Default: touching at the home pose.
 - Always: touching in ≥ 95% of samples.
@@ -546,16 +546,16 @@ Principle. Mature exporters already read each CAD package's mates well, so they 
 
 | CAD | Best format (front end) | Runs headless on Linux? | Needs | Can also write directly | Fallback |
 |---|---|---|---|---|---|
-| Onshape | native: cad2urdf's own REST client (`onshape.py`) on the live document: all mates, limits, gear relations, Onshape mass properties | yes (API keys) | API keys (no naming convention) | — | urdf-export: Onshape's built-in URDF export (every mate becomes a joint, GLTF/STL meshes), then step |
+| Onshape | native: cad2urdf's own REST client (`frontends.py`) on the live document: all mates, limits, gear relations, Onshape mass properties | yes (API keys) | API keys (no naming convention) | — | urdf-export: Onshape's built-in URDF export (every mate becomes a joint, GLTF/STL meshes), then step |
 | SolidWorks | native: sw2robot (reads mates, infers tree/axes) | no extract needs Windows + SW | SW session | MJCF | classic sw_urdf_exporter (manual, often Y-up → `root_rpy`), then step |
 | Fusion | native: ACDC4Robot | no in Fusion (an LLM can drive it through the Fusion MCP) | Rigid/Revolute/Slider joints only | MJCF, SDFormat | fusion2urdf forks, then step |
 | Creo | native: creo2urdf from Mechanism connections | no in Creo | Toolkit licence, CSYS naming, YAML | — | step (usual case without Toolkit) |
-| any | step: `cad2urdf.draft` + geometric joints | yes | one STEP of the whole assembly; running fits drawn with clearance | — | — |
+| any | step: `cad2urdf.step` + geometric joints | yes | one STEP of the whole assembly; running fits drawn with clearance | — | — |
 | existing URDF | urdf: ingest as-is | yes | `package_dirs`, `root_rpy` if needed | — | — |
 
 When to choose STEP over native: only when you have no access to the CAD tool or its API, or no licence (Creo Toolkit). STEP loses the mates, so joints come from the geometry rules below, and limits and mimic couplings must be supplied by hand.
 
-Deterministic STEP draft (`cad2urdf/draft.py`), rules:
+Deterministic STEP draft (`cad2urdf/step.py`), rules:
 1. Parts whose B-reps touch form one link, unless the contact is a running fit.
 2. A running fit is a coaxial shaft and bore with radial clearance of 0.005–0.15 mm. Zero clearance is a press fit (fixed). More than 0.15 mm is a fastener hole (fixed if the parts touch elsewhere).
 3. The root link is the component with parts named base/chassis/frame, otherwise the largest one.
@@ -581,7 +581,7 @@ On `arm4` this recovers all 7 links and 6 joint types exactly (verified). It nee
 |---|---|---|
 | step | arm4, no hand-written spec | drafted: 7 links, 6 joints; SAPIEN and ManiSkill (CPU + GPU) track the test pose (verified) |
 | step | SO-100 arm (servos, saved folded) | drafted: 7 links, 6 joints, matching the reference (verified) |
-| step + hand spec | Haro380 (joint modules, gas spring) | 6 joints and the spring loop from `inspect_step` axes (verified) |
+| step + hand spec | Haro380 (joint modules, gas spring) | 6 joints and the spring loop from `python -m cad2urdf.step` axes (verified) |
 | solidworks / native | TR infantry URDF (Y-up, `package://`, massless dummy links) | runs in SAPIEN, ManiSkill and MuJoCo via our MJCF (verified) |
 | urdf / native | arm4 URDF round trip | identical FK over 50 random poses (verified) |
 | onshape / native | 7 public robots, Open Duck Mini | joint counts match; MuJoCo, PyBullet, Gazebo; Orbita's loops closed in MJCF (verified) |
@@ -589,7 +589,7 @@ On `arm4` this recovers all 7 links and 6 joint types exactly (verified). It nee
 ### 9.4 What still needs a human or an LLM (the skill's job)
 
 - STEP REVIEW items: joint limits, slide-or-spin fits, materials and masses, mimic couplings.
-- Specs for CAD whose joints aren't modelled as fits: group links by part name and take axes from `inspect_step`.
+- Specs for CAD whose joints aren't modelled as fits: group links by part name and take axes from `python -m cad2urdf.step`.
 - Driving in-CAD exporters when a CAD MCP server is connected (Fusion MCP, SolidWorks COM, CREOSON).
 - Turning `validation.json` symptoms into spec changes.
 
@@ -614,11 +614,11 @@ STEP    ─►│ B-rep: shaft/bore inference        │     │ inertia, meshes
 
 Stages, as implemented:
 
-1. Front ends: STEP (geometric joints and a drafted spec), exporter URDFs (`ingest.py`), Onshape (`onshape.py`). SolidWorks, Fusion and Creo exporters run inside the CAD tool (§9).
-2. Link grouping: spec patterns, or union-find over contacts with a min-cut for posed CAD (`draft.py`).
+1. Front ends: STEP (geometric joints and a drafted spec), exporter URDFs and Onshape (`frontends.py`). SolidWorks, Fusion and Creo exporters run inside the CAD tool (§9).
+2. Link grouping: spec patterns, or union-find over contacts with a min-cut for posed CAD (`step.py`).
 3. Joints: mates, then naming conventions, then geometric candidates; the spec settles ambiguity. Mimic from gear relations; loop closures as MJCF equalities.
 4. Mass properties from B-rep and density, with validity checks.
-5. Visuals per link and material, with fasteners dropped and error-bounded decimation (`simplify.py`).
+5. Visuals per link and material, with fasteners dropped and error-bounded decimation (`geometry.py`).
 6. Collision per link (modes, scoring, per-link budget).
 7. SRDF with a sampled matrix.
 8. Writers: URDF, Gazebo, MJCF, SRDF, Isaac Lab, ManiSkill.

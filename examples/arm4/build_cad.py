@@ -4,7 +4,7 @@ Builds 24 named solids with build123d (OpenCascade) and writes them as a single
 STEP assembly (``cad/arm4.step``). The STEP file stands in for "an assembly
 exported from Onshape / SolidWorks / Fusion / Creo": it keeps part names,
 placement and exact B-rep geometry, but — like almost every real STEP export —
-it carries *no mates/joints*. Joints are recovered by ``cad2urdf.joints``
+it carries *no mates/joints*. Joints are recovered by ``cad2urdf.step``
 (geometric inference) and fixed by ``robot_spec.yaml`` (the granularity spec).
 
 The design is posed in its zero configuration (arm pointing straight up) and

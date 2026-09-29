@@ -3,7 +3,7 @@
 import numpy as np
 import trimesh
 
-from cad2urdf.simplify import fit_spheres
+from cad2urdf.geometry import fit_spheres
 from cad2urdf.util import is_fastener
 
 

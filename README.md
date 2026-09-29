@@ -76,7 +76,7 @@ python -m cad2urdf.route --cad fusion --format native --sim mujoco --run \
 python -m cad2urdf examples/arm4/robot_spec.yaml -o build/arm4                # your own full spec
 python -m cad2urdf.scene field.step -o build/field                            # static scene + drop test
 python -m cad2urdf.validate build/robot --sims mujoco,pybullet,sapien,maniskill,gazebo
-python -m cad2urdf.inspect_step robot.step                                    # part groups and joint axes
+python -m cad2urdf.step robot.step                                    # part groups and joint axes
 ```
 
 Every route writes every output; `--sim` only picks collision defaults and which checks run. The main file per simulator:
@@ -138,7 +138,7 @@ closures:                                                     # loops a URDF tre
 srdf: {group_states: {home: {group: arm, joints: {base_to_turret: 0}}}}
 ```
 
-When the draft can't find the joints (motors butted flat against a link, zero-clearance pivots), write the links and joints yourself with axes from `python -m cad2urdf.inspect_step`. [`examples/random_step/Haro380.spec.yaml`](examples/random_step/Haro380.spec.yaml) is a worked example.
+When the draft can't find the joints (motors butted flat against a link, zero-clearance pivots), write the links and joints yourself with axes from `python -m cad2urdf.step`. [`examples/random_step/Haro380.spec.yaml`](examples/random_step/Haro380.spec.yaml) is a worked example.
 
 Collision modes: `none`, `box`, `spheres`, `primitives`, `hull`, `auto` (default), `decompose`, `keep` (an input URDF's own collisions). Exporter URDFs also take `package_dirs` to resolve `package://` paths.
 
@@ -150,19 +150,15 @@ Collision modes: `none`, `box`, `spheres`, `primitives`, `hull`, `auto` (default
 
 ```
 cad2urdf/
-  route.py, routes.py     router CLI and routing table
-  cad.py                  STEP loading, mass properties, tessellation
-  draft.py, joints.py     spec draft and joint inference for STEP
-  inspect_step.py         part groups and shared axes, for hand-written specs
-  onshape.py, ingest.py   Onshape API and exporter-URDF front ends
-  model.py                intermediate representation
-  simplify.py             fastener removal, visual decimation
-  collision.py            collision modes and per-link budget
-  urdf.py, srdf.py, mjcf.py, targets.py   writers
-  sweep.py                joint-limit sweep
-  scene.py                static scenes and drop test
+  route.py         router CLI and routing table
+  step.py          STEP front end: loading, joint inference, spec draft, inspector (python -m cad2urdf.step)
+  frontends.py     Onshape API and exporter-URDF front ends
+  model.py         intermediate representation
+  geometry.py      visual decimation, collision modes and budget, joint-limit sweep
+  writers.py       URDF, MJCF, SRDF, Isaac Lab / ManiSkill / Gazebo side files
+  scene.py         static scenes and drop test
   validate.py, isaac_probe.py   simulator checks
-  safety.py, util.py      memory cap, shared helpers
+  util.py          memory sandbox and shared helpers
 examples/                 arm4 (parametric sample), sigmaban, random_step (Haro380, gripper, Ender 3, ...)
 tests/                    pytest suite and view_urdf.py
 docs/                     RESEARCH.md, ONSHAPE_API_KEYS.md

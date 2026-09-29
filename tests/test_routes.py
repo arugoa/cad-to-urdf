@@ -6,22 +6,22 @@ import numpy as np
 import pytest
 import yourdfpy
 
-from cad2urdf import model, routes, urdf
-from cad2urdf.draft import draft_spec
+from cad2urdf import model, route, writers
+from cad2urdf.step import draft_spec
 
 ARM4 = Path(__file__).parents[1] / "examples" / "arm4"
 
 
 def test_every_cad_format_sim_has_a_plan():
-    for (cad, fmt) in routes.FRONT_ENDS:
-        for sim in routes.SIMS:
-            text = routes.plan(cad, fmt, sim)
+    for (cad, fmt) in route.FRONT_ENDS:
+        for sim in route.SIMS:
+            text = route.plan(cad, fmt, sim)
             assert "Front end" in text and "Finish" in text
 
 
 def test_unknown_route_is_rejected():
     with pytest.raises(KeyError):
-        routes.front_end("creo", "urdf-export")
+        route.front_end("creo", "urdf-export")
 
 
 def test_draft_recovers_arm4_structure():
@@ -37,13 +37,13 @@ def test_draft_recovers_arm4_structure():
 
 def test_urdf_round_trip_preserves_kinematics(tmp_path):
     src = model.build(ARM4 / "robot_spec.yaml")
-    urdf.export_meshes(src, tmp_path / "a" / "meshes")
-    urdf.write_urdf(src, tmp_path / "a" / "arm4.urdf")
+    writers.export_meshes(src, tmp_path / "a" / "meshes")
+    writers.write_urdf(src, tmp_path / "a" / "arm4.urdf")
     spec = tmp_path / "rt.yaml"
     spec.write_text(f"robot: rt\nsource: {tmp_path / 'a' / 'arm4.urdf'}\n")
     rt = model.build(spec)
-    urdf.export_meshes(rt, tmp_path / "b" / "meshes")
-    urdf.write_urdf(rt, tmp_path / "b" / "rt.urdf")
+    writers.export_meshes(rt, tmp_path / "b" / "meshes")
+    writers.write_urdf(rt, tmp_path / "b" / "rt.urdf")
     a, b = yourdfpy.URDF.load(str(tmp_path / "a" / "arm4.urdf")), yourdfpy.URDF.load(str(tmp_path / "b" / "rt.urdf"))
     q = {n: 0.3 if "finger" not in n else 0.004 for n in a.actuated_joint_names}
     a.update_cfg(q)
@@ -64,7 +64,7 @@ def test_rotated_frames_survive_ingest(tmp_path):
         <limit lower="-1" upper="1" effort="1" velocity="1"/></joint></robot>""")
     (tmp_path / "s.yaml").write_text(f"source: {tmp_path / 'r.urdf'}\n")
     r = model.build(tmp_path / "s.yaml")
-    urdf.write_urdf(r, tmp_path / "out.urdf")
+    writers.write_urdf(r, tmp_path / "out.urdf")
     x, y = yourdfpy.URDF.load(str(tmp_path / "r.urdf")), yourdfpy.URDF.load(str(tmp_path / "out.urdf"), load_meshes=False)
     for q in (-0.8, 0.0, 0.6):
         x.update_cfg({"j": q})
@@ -77,15 +77,13 @@ def test_spec_closure_becomes_mjcf_connect(tmp_path):
     import mujoco
     import yaml
 
-    from cad2urdf import mjcf
-
     spec = yaml.safe_load((ARM4 / "robot_spec.yaml").read_text())
     spec["source"] = str((ARM4 / spec["source"]).resolve())
     spec["closures"] = {"finger_tie": {"link1": "finger_left", "link2": "gripper_base", "point": [0, 0, 400]}}
     (tmp_path / "spec.yaml").write_text(yaml.safe_dump(spec))
     r = model.build(tmp_path / "spec.yaml")
-    urdf.export_meshes(r, tmp_path / "meshes")
-    mjcf.write_mjcf(r, tmp_path / "mjcf" / "r.xml", meshdir="../meshes")
+    writers.export_meshes(r, tmp_path / "meshes")
+    writers.write_mjcf(r, tmp_path / "mjcf" / "r.xml", meshdir="../meshes")
     m = mujoco.MjModel.from_xml_path(str(tmp_path / "mjcf" / "r.xml"))
     assert m.neq >= 1 and m.eq_type[0] == mujoco.mjtEq.mjEQ_CONNECT
     d = mujoco.MjData(m)
@@ -109,8 +107,8 @@ def test_root_rpy_reaches_the_urdf(tmp_path):
         s = dict(spec, root_rpy=rpy) if rpy else spec
         (tmp_path / f"{tag}.yaml").write_text(yaml.safe_dump(s))
         r = model.build(tmp_path / f"{tag}.yaml")
-        urdf.export_meshes(r, tmp_path / tag / "meshes")
-        urdf.write_urdf(r, tmp_path / tag / "r.urdf", mesh_prefix="meshes")
+        writers.export_meshes(r, tmp_path / tag / "meshes")
+        writers.write_urdf(r, tmp_path / tag / "r.urdf", mesh_prefix="meshes")
         out[tag] = yourdfpy.URDF.load(str(tmp_path / tag / "r.urdf"), load_meshes=True)
     R = Rotation.from_euler("xyz", [np.pi / 2, 0, 0]).as_matrix()
     a, b = out["plain"], out["rot"]
