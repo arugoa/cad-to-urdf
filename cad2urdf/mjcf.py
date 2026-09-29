@@ -1,9 +1,5 @@
-"""Native MJCF writer (MuJoCo / MJX / MuJoCo Warp / Newton's MJCF importer).
-
-Written directly from the IR instead of compiling the URDF, because MJCF can
-carry what URDF cannot: armature, actuators with gains, equality constraints
-for mimic joints, contact excludes from the SRDF, keyframes and per-geom
-contact parameters.
+"""Native MJCF writer: armature, actuators, mimic and loop equalities, contact excludes and keyframes,
+which URDF can't carry.
 """
 
 from __future__ import annotations
@@ -12,15 +8,10 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 from .model import Robot
-from .urdf import fmt
+from .util import fmt, quat
 
-
-def _quat(T: np.ndarray) -> str:
-    x, y, z, w = Rotation.from_matrix(T[:3, :3]).as_quat()
-    return fmt((w, x, y, z))
 
 
 MIN_MASS = 1e-4  # kg: MuJoCo rejects massless moving bodies (URDF dummy links often have mass 0)
@@ -87,7 +78,7 @@ def build_mjcf(
             pos, R = robot.child_in_parent(j)
         T = np.eye(4)
         T[:3, :3] = R
-        body = ET.SubElement(parent_el, "body", name=name, pos=fmt(pos), quat=_quat(T))
+        body = ET.SubElement(parent_el, "body", name=name, pos=fmt(pos), quat=quat(T))
         mass, I = _mass_inertia(link)
         ET.SubElement(body, "inertial", pos=fmt(link.com), mass=f"{mass:.6g}",
                       fullinertia=fmt((I[0, 0], I[1, 1], I[2, 2], I[0, 1], I[0, 2], I[1, 2])))
@@ -111,7 +102,7 @@ def build_mjcf(
             if g.kind == "mesh":
                 a.update(type="mesh", mesh=f"{name}_col{i}")
             else:
-                a.update(pos=fmt(g.transform[:3, 3]), quat=_quat(g.transform))
+                a.update(pos=fmt(g.transform[:3, 3]), quat=quat(g.transform))
                 if g.kind == "box":
                     a.update(type="box", size=fmt(np.array(g.size) / 2))
                 elif g.kind == "cylinder":
@@ -129,14 +120,17 @@ def build_mjcf(
     if tcp is not None:
         ET.SubElement(tcp, "site", name="tcp", pos="0 0 0.12", size="0.005")
 
+    excludes = list(excludes or []) + [(c["link1"], c["link2"]) for c in robot.closures]
     if excludes:
         contact = ET.SubElement(root, "contact")
-        for a, b in excludes:
+        for a, b in dict.fromkeys(tuple(e) for e in excludes):
             ET.SubElement(contact, "exclude", body1=a, body2=b)
 
     mimics = [j for j in robot.joints.values() if j.mimic]
-    if mimics:
+    if mimics or robot.closures:
         eq = ET.SubElement(root, "equality")
+        for c in robot.closures:  # closed loops: a point constraint at the closing mate
+            ET.SubElement(eq, "connect", name=c["name"], body1=c["link1"], body2=c["link2"], anchor=fmt(c["anchor1"]))
         for j in mimics:
             m = j.mimic
             ET.SubElement(eq, "joint", joint1=j.name, joint2=m["joint"],
@@ -147,6 +141,13 @@ def build_mjcf(
     for j in robot.moving_joints():
         a = j.actuator
         if a.get("kind", "none") == "none" or j.mimic:
+            continue
+        if a["kind"] == "velocity":  # drive wheels: ctrl is a joint speed (rad/s or m/s)
+            vel = dict(name=j.name, joint=j.name, kv=f"{a.get('kv', 1.0):.6g}")
+            if j.effort:
+                vel["forcerange"] = fmt((-j.effort, j.effort))
+            ET.SubElement(act, "velocity", vel)
+            ctrl_joints.append(None)
             continue
         ctrl_joints.append(j.name)
         attrs = dict(name=j.name, joint=j.name, kp=f"{a['kp']:.6g}", kv=f"{a.get('kv', 0):.6g}")
@@ -162,7 +163,7 @@ def build_mjcf(
         root_q = list(robot.links[robot.root].origin) + [1, 0, 0, 0] if robot.floating_base and floating else []
         for kname, q in keyframes.items():
             qpos = root_q + [q.get(n, 0.0) for n in order]
-            ctrl = [q.get(n, 0.0) for n in ctrl_joints]
+            ctrl = [q.get(n, 0.0) if n else 0.0 for n in ctrl_joints]
             ET.SubElement(kf, "key", name=kname, qpos=fmt(qpos), ctrl=fmt(ctrl))
 
     ET.indent(root)

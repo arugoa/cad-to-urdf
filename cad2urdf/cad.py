@@ -31,11 +31,7 @@ class Part:
 
 
 def load_parts(step_path: Path) -> list[Part]:
-    """Flatten a STEP assembly into named solids.
-
-    Nested sub-assemblies are walked depth-first; a leaf that contains several
-    solids is split and suffixed ``_0, _1, ...`` so every solid has a unique name.
-    """
+    """Flatten a STEP assembly into uniquely named solids (multi-solid leaves get ``_0, _1, ...``)."""
     root = import_step(str(step_path))
     parts: list[Part] = []
 
@@ -51,7 +47,7 @@ def load_parts(step_path: Path) -> list[Part]:
             parts.append(Part(name=name, shape=solid))
 
     walk(root, "")
-    # Real exports repeat names (268 x "REV-21", every screw): suffix duplicates deterministically.
+    # exports repeat names (every screw): suffix duplicates
     seen: dict[str, int] = {}
     counts: dict[str, int] = {}
     for p in parts:
@@ -78,11 +74,7 @@ def mass_properties(part: Part, unit_scale: float) -> None:
 
 
 def tessellate(part: Part, unit_scale: float, linear_mm: float, angular_deg: float) -> None:
-    """Mesh the part with OpenCascade, face by face.
-
-    Faces that fail to triangulate (degenerate faces in real exports) are skipped and counted in
-    ``part.skipped_faces`` instead of aborting the whole conversion.
-    """
+    """Mesh the part face by face; faces that fail to triangulate are counted in ``skipped_faces``."""
     from OCP.BRep import BRep_Tool
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED

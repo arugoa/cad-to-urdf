@@ -1,32 +1,15 @@
-"""Deterministic draft spec for a mate-less STEP assembly.
+"""Deterministic draft spec for a STEP assembly (no mates).
 
-Rules (no LLM, same answer every run):
-
-1. Every solid is a part. Two parts are *fixed together* if their B-reps touch
-   (distance <= ``touch_tol``) and the contact is not a running fit.
-2. A *running fit* is a coaxial shaft/bore pair with radial clearance in
-   (``press_fit_tol``, ``max_running_clearance``] (see ``joints.infer_joints``).
-   Zero clearance = press fit = fixed; a larger gap is a fastener clearance
-   hole (bolt in plate) = fixed if the parts touch elsewhere (bolt head).
-   This is the modelling convention the rule relies on: bearings/bushings drawn
-   with a small clearance, press fits without, bolt holes with a normal
-   clearance-hole gap.
-3. Links = connected components of "fixed together" (union-find).
-4. Root link = the component whose parts are named like ``base``/``chassis``/
-   ``frame``, else the heaviest one (by volume).
-5. Joints = running fits between components, tree-ified by BFS from the root,
-   preferring the longest engagement. ``revolute`` hints stay revolute;
-   ``cylindrical`` (long free shaft: slide or spin) is written as prismatic
-   and flagged ``REVIEW``.
-6. Limits are placeholders (revolute +/-pi, prismatic +/- half the free shaft)
-   and flagged ``REVIEW``: geometry cannot tell where the hard stops are.
-
-The result is written as ``robot_spec.draft.yaml`` next to the outputs; review
-the REVIEW lines, rename links/joints if you like, and re-run with it.
+Parts that touch are rigidly joined unless the contact is a joint: a shaft in a bore with running
+clearance, a pin snug in one part and loose in the other, a bearing's inner race, a servo's output horn,
+or meshing gears. Joined parts become links (a min-cut drops incidental contacts from posed CAD), running
+fits become joints (tree from the root link), and every guess is written as a REVIEW line in the draft.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 from collections import defaultdict
@@ -39,49 +22,31 @@ from OCP.BRepMesh import BRepMesh_IncrementalMesh
 
 from . import cad
 from .joints import JointCandidate, infer_joints
+from .util import UnionFind, is_fastener
 
 ROOT_HINT = re.compile(r"chassis|base|frame|body|hull", re.I)
-# Bearings: a name that says so AND annular geometry. Both are required (a "bearing plate" is a plate).
+# a bearing needs the name AND annular geometry (a "bearing plate" is a plate)
 BEARING_NAME = re.compile(r"bearing|(?<![a-z0-9])\d+x\d+x\d+(?![a-z0-9])|^mr\d+|^\d{4}(zz|rs|2rs)?$", re.I)
-# Gears/pulleys: tooth-count names ("117t") or explicit words. Two touching gears are meshing, not fixed.
+# touching gears mesh rather than join
 GEAR_NAME = re.compile(r"(?<![a-z])\d+t(?![a-z])|gear|pinion|pulley|sprocket", re.I)
-# Hobby/robot servos: the part includes its output horn, so it touches both the mount and the driven part.
+# servo parts include their horn, so they touch both the mount and the driven part
 SERVO_NAME = re.compile(r"sts\d{4}|scs\d{2,4}|sm\d{2}bl|xl-?\d{3}|xm-?\d{3}|xh-?\d{3}|xc-?\d{3}|xw-?\d{3}|"
                         r"ax-?1[28]|mx-?\d{2}|dynamixel|feetech|servo|lx-?\d{3}|mg9\d{2}|ds3\d{3}", re.I)
-# Fasteners never form a joint by themselves: they are clamped to what they pass through (a screw in a
-# 3.2 mm clearance hole otherwise looks like a shaft in a bearing). Used as an axle through a bearing,
-# the joint comes from the bearing's inner race instead.
-FASTENER_NAME = re.compile(r"screw|bolt|nut(?![a-z])|washer|rivet|standoff|dowel|insert|locknut|set_?screw|"
-                           r"(?<![a-z])(shcs|bhcs|fhcs|msb\d+)", re.I)
-# Placeholder geometry that is not part of the physical robot (keep-out volumes, reference bodies).
+# placeholder geometry, not physical parts
 IGNORE_HINT = re.compile(r"no.?blockage|keep.?out|zone|envelope|reference|clearance.?vol|dummy|placeholder", re.I)
 
-
-class _UF:
-    def __init__(self, items):
-        self.p = {i: i for i in items}
-
-    def find(self, x):
-        while self.p[x] != x:
-            self.p[x] = self.p[self.p[x]]
-            x = self.p[x]
-        return x
-
-    def union(self, a, b):
-        self.p[self.find(a)] = self.find(b)
+HORN_DOMINANCE = 0.6  # horn contacts weaker than this fraction of the strongest are grazes, not the output
+MAX_INCIDENTAL = 40  # a loop is broken only if its weakest contact has fewer overlapping faces than this
+LOOSE_PIVOT_MAX = 1.0e-3  # loosest hole a pin can still pivot in (printed linkages)
 
 
 def _touching(parts: list[cad.Part], scale: float, tol: float) -> list[tuple[str, str]]:
-    """Pairs of parts whose surfaces come within ``tol`` of each other.
-
-    Bounding-box prefilter, then OpenCascade's mesh-based proximity test
-    (BRepExtrema_ShapeProximity). The exact B-rep distance took ~1.5 s per pair
-    on a real 1,142-part robot (hours in total); the mesh test takes < 1 ms.
-    The mesh deflection is added to the tolerance so tessellation cannot hide contact.
-    """
+    """Pairs of parts whose surfaces come within ``tol``: bounding-box prefilter, then OpenCascade's
+    mesh-based proximity test (exact B-rep distance is ~1000x slower). The mesh deflection is added to
+    the tolerance so tessellation can't hide a contact."""
     deflection = 0.02e-3 / scale  # CAD units
     tol_cad = tol / scale + deflection
-    # bounding boxes FIRST: build123d's bounding_box() discards the triangulation the proximity test needs
+    # before meshing: build123d's bounding_box() discards triangulations
     bbs = [p.shape.bounding_box() for p in parts]
     lo = np.array([[b.min.X, b.min.Y, b.min.Z] for b in bbs]) - tol_cad
     hi = np.array([[b.max.X, b.max.Y, b.max.Z] for b in bbs]) + tol_cad
@@ -99,10 +64,7 @@ def _touching(parts: list[cad.Part], scale: float, tol: float) -> list[tuple[str
 
 
 def _cached_touching(step_path: Path, parts, scale, tol):
-    """The contact search is the slow step (minutes on 1,000+ parts); cache it per file content."""
-    import hashlib
-    import json
-
+    """``_touching``, cached per STEP file content (it is the slow step)."""
     h = hashlib.sha1(Path(step_path).read_bytes()).hexdigest()[:16]
     cache = Path.home() / ".cache" / "cad2urdf" / f"touch_{h}_{tol:.0e}.json"
     names = [p.name for p in parts]
@@ -138,10 +100,8 @@ def _annulus(p: cad.Part, scale: float):
 
 
 def _servo_horn(p: cad.Part, scale: float):
-    """Horn discs of a servo: the largest coaxial group of thin convex cylinders (r >= 4 mm, length <= r).
-
-    Returns (axis_dir, axis_point, [(t0, t1, r), ...], center, width) or None.
-    """
+    """Horn discs of a servo (the largest coaxial group of thin cylinders, r >= 4 mm, length <= r):
+    (axis_dir, axis_point, [(t0, t1, r), ...], center, width), or None."""
     from .joints import _coaxial, cylindrical_faces
 
     discs = [f for f in cylindrical_faces(p, scale)
@@ -174,7 +134,6 @@ def _horn_faces(p: cad.Part, horn, scale: float, tol: float = 0.3e-3):
 
 def _horn_contact(servo_faces, q: cad.Part, tol_cad: float) -> int:
     """How many of the servo's horn faces touch part q."""
-    # (re)mesh right before testing: bounding_box() calls elsewhere drop triangulations
     defl = tol_cad / 3
     BRepMesh_IncrementalMesh(q.shape.wrapped, defl, False, 0.2, True)
     n = 0
@@ -186,26 +145,46 @@ def _horn_contact(servo_faces, q: cad.Part, tol_cad: float) -> int:
     return n
 
 
-# a horn contact counts as the servo's output only if it is at least this fraction of the strongest one;
-# weaker ones are grazes from a posed/folded assembly (neither joint nor rigid)
-HORN_DOMINANCE = 0.6
-# a contact cut to break a joint loop must be weaker than this (overlapping faces on both sides);
-# stronger loops are kept as real closed linkages
-MAX_INCIDENTAL = 40
+def _loose_pivots(cands, press_fit_tol, max_running_clearance):
+    """Pins snug in one part and >= 10x looser in another turn in the loose hole. Returns the (shaft, bore)
+    pairs that pivot and the ones that hold the pin. Screws don't qualify (their thread has no clearance)."""
+    by_shaft = defaultdict(list)
+    for c in cands:
+        for e in c.evidence:
+            if "->" in e:
+                a, b = e.split("->")
+                by_shaft[a].append((c.clearance, b.split(" ")[0]))
+    pivots, held = set(), set()
+    for shaft, fits in by_shaft.items():
+        if is_fastener(shaft):
+            continue
+        snug = [(cl, b) for cl, b in fits if press_fit_tol < cl <= max_running_clearance]
+        loose = [(cl, b) for cl, b in fits if max_running_clearance < cl <= LOOSE_PIVOT_MAX]
+        if snug and loose and min(cl for cl, _ in loose) >= 10 * max(cl for cl, _ in snug):
+            pivots |= {(shaft, b) for _, b in loose}
+            held |= {(shaft, b) for _, b in snug}
+    return pivots, held
 
 
-def _classify_fits(cands, rings, press_fit_tol, max_running_clearance, part_link=None):
-    """Split clearance fits into real running fits and ones that are rigid by construction:
-    a bearing's outer race in its housing, or a fastener in a clearance hole (unless the hole is a bearing
-    bore, where the bearing rule makes the joint). Candidates carry "shaft->bore" part names as evidence."""
+def _classify_fits(cands, rings, press_fit_tol, max_running_clearance, part_link=None, pivots=(), held=()):
+    """Split fits into running fits (joints) and rigid ones: a bearing's outer race, or a fastener in a
+    clearance hole that isn't a bearing bore. ``pivots``/``held`` override the clearance window for pins."""
     running, fixed = [], []
     for c in cands:
+        pairs = [e.split("->") for e in c.evidence if "->" in e]
+        ev = {(a, b.split(" ")[0]) for a, b in pairs}
+        if ev & set(pivots):
+            running.append(c)
+            continue
+        if ev & set(held):
+            if part_link is None:
+                fixed.append(c)
+            continue
         if not (press_fit_tol < c.clearance <= max_running_clearance):
             continue
-        pairs = [e.split("->") for e in c.evidence if "->" in e]
         shafts = {a for a, _ in pairs}
         bores = {b.split(" ")[0] for _, b in pairs}
-        if shafts & set(rings) or any(FASTENER_NAME.search(a) for a in shafts) and not bores & set(rings):
+        if shafts & set(rings) or any(is_fastener(a) for a in shafts) and not bores & set(rings):
             if part_link is None:  # part-level pass: link names are part names
                 fixed.append(c)
             continue
@@ -214,15 +193,14 @@ def _classify_fits(cands, rings, press_fit_tol, max_running_clearance, part_link
 
 
 def _contact_strength(a: cad.Part, b: cad.Part, tol_cad: float) -> float:
-    """Contact strength ~ number of overlapping faces on both sides (firm mounts share many faces;
-    a folded arm resting on its base touches along a few)."""
+    """Number of overlapping faces: firm mounts share many, a folded arm resting on its base a few."""
     pr = BRepExtrema_ShapeProximity(a.shape.wrapped, b.shape.wrapped, tol_cad)
     pr.Perform()
     return float(pr.OverlapSubShapes1().Size() + pr.OverlapSubShapes2().Size()) if pr.IsDone() else 1.0
 
 
 def _inner_side(q: cad.Part, ring, scale: float) -> bool:
-    """True if part q sits inside the ring's mid radius around its axis (shaft, spacer on the shaft)."""
+    """Part q sits inside the ring's mid radius (the shaft side)."""
     from .joints import _coaxial, cylindrical_faces
 
     d, pt, r_in, r_out = ring[0], ring[1], ring[2], ring[3]
@@ -231,9 +209,16 @@ def _inner_side(q: cad.Part, ring, scale: float) -> bool:
     return bool(co) and max(f.radius for f in co) <= (r_in + r_out) / 2
 
 
+def _on_axis(part: cad.Part, c: JointCandidate, scale: float) -> bool:
+    """The part hugs the joint axis (spacer, bushing): every vertex within 3 pin radii + 1 mm."""
+    v = np.array([tuple(q) for q in part.shape.vertices()]) * scale - c.origin
+    radial = np.linalg.norm(np.cross(v, c.direction), axis=1)
+    return bool(radial.max() <= 3 * c.radius + 1e-3)
+
+
 def _link_name(parts: list, taken: set[str]) -> str:
-    """Name a link after its largest part that isn't a fastener or bearing (else its largest part)."""
-    real = [p for p in parts if not (FASTENER_NAME.search(p.name) or BEARING_NAME.search(p.name))]
+    """Named after its largest part that isn't a fastener or bearing."""
+    real = [p for p in parts if not (is_fastener(p.name) or BEARING_NAME.search(p.name))]
     main = max(real or parts, key=lambda p: p.volume)
     base = re.sub(r"[^a-z0-9]+", "_", main.name.split("#")[0].lower()).strip("_")[:24] or "link"
     if base[0].isdigit():
@@ -257,8 +242,10 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
         cad.mass_properties(p, scale)
     by_name = {p.name: p for p in parts}
     rings = {p.name: r for p in parts if BEARING_NAME.search(p.name) and (r := _annulus(p, scale))}
-    cands = infer_joints(parts, scale)
-    running, forced_fixed = _classify_fits(cands, rings, press_fit_tol, max_running_clearance)
+    cands = infer_joints(parts, scale, radial_tol=LOOSE_PIVOT_MAX)
+    pivots, held = _loose_pivots(cands, press_fit_tol, max_running_clearance)
+    running, forced_fixed = _classify_fits(cands, rings, press_fit_tol, max_running_clearance,
+                                           pivots=pivots, held=held)
     running_pairs = {tuple(sorted((c.link_a, c.link_b))) for c in running}
     gears = {p.name for p in parts if GEAR_NAME.search(p.name)}
     inner_of: dict[str, set[str]] = defaultdict(set)  # bearing/servo -> parts on its rotating side
@@ -267,12 +254,12 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
         if SERVO_NAME.search(p.name) and (h := _servo_horn(p, scale)):
             servos[p.name] = (h, _horn_faces(p, h, scale))
             d, pt, discs, center, w = h
-            rings[p.name] = (d, pt, discs[0][2], discs[0][2], center, w)  # same shape as a bearing entry
+            rings[p.name] = (d, pt, discs[0][2], discs[0][2], center, w)  # same layout as a bearing
     tol_cad = (touch_tol + 0.02e-3) / scale
 
     touching = _cached_touching(step_path, parts, scale, touch_tol)
     horn_graze: set[tuple[str, str]] = set()
-    for srv, (_, faces) in servos.items():  # classify each servo's neighbours: output / graze / mount
+    for srv, (_, faces) in servos.items():  # each neighbour is the output, a graze, or the mount
         nbrs = sorted({b if a == srv else a for a, b in touching if srv in (a, b)} - set(servos))
         strength = {q: _horn_contact(faces, by_name[q], tol_cad) for q in nbrs}
         top = max(strength.values(), default=0)
@@ -281,7 +268,7 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
                 inner_of[srv].add(q)
             elif n:
                 horn_graze.add(tuple(sorted((srv, q))))
-        if not [q for q in nbrs if not strength[q]]:  # no body contact at all: every servo is mounted somewhere
+        if not [q for q in nbrs if not strength[q]]:  # no body contact: the strongest graze is the mount
             grazes = [q for q in nbrs if strength[q] and q not in inner_of[srv]]
             if grazes:
                 horn_graze.discard(tuple(sorted((srv, max(grazes, key=lambda q: strength[q])))))
@@ -293,25 +280,23 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
             return False  # incidental graze of a servo horn
         for srv, other in ((a, b), (b, a)):
             if srv in servos and other in inner_of[srv]:
-                return False  # contact on the servo's output horn: this contact IS the joint
+                return False  # the servo's output: this contact is the joint
         for brg, other in ((a, b), (b, a)):
             if brg in rings and brg not in servos and other not in rings and _inner_side(by_name[other], rings[brg], scale):
                 inner_of[brg].add(other)
-                return False  # shaft side of a bearing: this contact IS the joint
+                return False  # a bearing's shaft side: this contact is the joint
         return True
 
     review: list[str] = []
-    # Contact graph: an edge = a fixed relation, weighted by contact strength (overlapping faces).
     import networkx as nx
 
-    for p in parts:  # (re)mesh once for the strength measurements below
+    for p in parts:  # re-mesh for the strength measurements
         BRepMesh_IncrementalMesh(p.shape.wrapped, 0.02e-3 / scale, False, 0.2, True)
     G = nx.Graph()
     G.add_nodes_from(p.name for p in parts)
     for a, b in touching:
         if tuple(sorted((a, b))) not in running_pairs and fixed(a, b):
-            # a servo housing is bolted to what its body touches, and a bearing's outer race is press-fit in
-            # what it touches (its inner side is not an edge here): never cut those contacts
+            # servo bodies and bearing outer races are mounted: never cut those
             cap = 1e9 if (a in servos or b in servos or a in rings or b in rings) \
                 else _contact_strength(by_name[a], by_name[b], tol_cad)
             G.add_edge(a, b, capacity=cap)
@@ -321,31 +306,29 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
     for c in forced_fixed:  # fasteners in clearance holes, bearing outer races in housings
         G.add_edge(c.link_a, c.link_b, capacity=1e9)
 
-    # Constraint: a servo/bearing and the parts on its rotating side must end up in different links.
-    # CAD is often saved in a folded/posed configuration where links rest against each other; those
-    # incidental contacts are cut with a minimum cut (weakest total contact first). Deterministic.
+    # Both sides of every joint (servo/bearing output, running fit) must end up in different links:
+    # contacts joining them in posed CAD are removed with a minimum cut.
+    must_split = [(s_, o) for s_ in sorted(inner_of) for o in sorted(inner_of[s_])] + sorted(running_pairs)
     cut_edges, welded_shut = [], []
     changed = True
     while changed:
         changed = False
-        for srv in sorted(inner_of):
-            for o in sorted(inner_of[srv]):
-                if (srv, o) in welded_shut or not nx.has_path(G, srv, o):
-                    continue
-                val, (side_a, side_b) = nx.minimum_cut(G, srv, o)
-                if val >= 1e8:  # only press fits / servo mounts connect them: don't cut those, report instead
-                    welded_shut.append((srv, o))
-                    continue
-                cut = sorted((u, v) for u in side_a for v in G[u] if v in side_b)
-                G.remove_edges_from(cut)
-                cut_edges += cut
-                changed = True
+        for srv, o in must_split:
+            if (srv, o) in welded_shut or not nx.has_path(G, srv, o):
+                continue
+            val, (side_a, side_b) = nx.minimum_cut(G, srv, o)
+            if val >= 1e8:  # only press fits / mounts connect them: report instead
+                welded_shut.append((srv, o))
+                continue
+            cut = sorted((u, v) for u in side_a for v in G[u] if v in side_b)
+            G.remove_edges_from(cut)
+            cut_edges += cut
+            changed = True
     if welded_shut:
         review.append(f"{len(welded_shut)} joint(s) welded shut by press fits / servo mounts (check the "
                       f"link grouping): {welded_shut[:6]}")
-    # A mechanism's joints must form a tree over its links. If the rigid contacts plus the joints close
-    # a loop, one of the rigid contacts on it is incidental (posed CAD): cut the weakest contact inside a
-    # link on the loop. Loops whose cheapest cut is strong (a real four-bar) are kept and reported.
+    # Joints must form a tree. A loop is broken at its weakest incidental contact; strong loops (real
+    # four-bars) are kept and reported.
     joint_pairs = [(s_, o) for s_, os_ in inner_of.items() for o in os_] + sorted(running_pairs)
     kept_loops: list[frozenset] = []
     for _ in range(50):
@@ -374,7 +357,7 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
         if best is None or best[0] > MAX_INCIDENTAL:
             kept_loops.append(frozenset(frozenset(n for n, cc in comp.items() if cc == ci) for ci in cycle))
             if len(kept_loops) > 1 and kept_loops[-1] in kept_loops[:-1]:
-                break  # same loop again: nothing left to cut
+                break
             review.append("closed kinematic loop kept (strong contacts; a real linkage or a coaxial support "
                           "such as an idler horn): " + " / ".join(
                               sorted(n for n, cc in comp.items() if cc == ci)[0] for ci in cycle))
@@ -385,7 +368,7 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
         review.append(f"cut {len(cut_edges)} incidental contact(s) (posed/folded CAD): "
                       + ", ".join(f"{u}|{v}" for u, v in cut_edges[:8]) + (" ..." if len(cut_edges) > 8 else ""))
 
-    uf = _UF([p.name for p in parts])
+    uf = UnionFind([p.name for p in parts])
     for a, b in G.edges:
         uf.union(a, b)
 
@@ -393,11 +376,11 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
         review.append(f"ignored {len(ignored)} placeholder part(s) (keep-out/zone/reference): {ignored[:8]}"
                       + (" ..." if len(ignored) > 8 else ""))
 
-    # component graph from running fits, re-inferred with the final grouping so a
-    # pin's press-fit length counts as held, not free (revolute vs cylindrical)
+    # re-infer fits with the final grouping, so a pin's held length isn't counted as free shaft
     for p in parts:
         p.link = uf.find(p.name)
-    running, _ = _classify_fits(infer_joints(parts, scale), rings, press_fit_tol, max_running_clearance,
+    running, _ = _classify_fits(infer_joints(parts, scale, radial_tol=LOOSE_PIVOT_MAX), rings, press_fit_tol,
+                                max_running_clearance, pivots=pivots, held=held,
                                 part_link={p.name: p.link for p in parts})
 
     welded = []
@@ -415,9 +398,8 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
                   f"{len(gears)} gear-named part(s); "
                   f"{len(set(welded))} bearing(s) had both sides welded together by other contacts: "
                   f"{sorted(set(welded))[:6]}")
-    # Redundant coaxial pivot (e.g. a servo's passive idler horn): a small group whose joints all lie on
-    # one axis, connecting two groups that are already jointed on that same axis. It adds a joint that
-    # can't move independently; merge it into the neighbour it touches more firmly (tie: rotating side).
+    # Merge links that add no motion: a small part on a coaxial pivot between two already-jointed links
+    # (idler horn), or a tiny part spinning on a pin (spacer).
     def collinear(c1, c2) -> bool:
         if abs(float(np.dot(c1.direction, c2.direction))) < np.cos(np.radians(1.0)):
             return False
@@ -435,14 +417,21 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
                 by_comp[b].append((a, c))
         for comp_c, es in sorted(by_comp.items()):
             nbrs = sorted({o for o, _ in es})
+            members = {p.name for p in parts if uf.find(p.name) == comp_c}
+            if len(nbrs) == 1 and not any(n in inner_of for n in members) and sum(
+                    by_name[n].volume for n in members) < 0.01 * sum(p.volume for p in parts) \
+                    and all(_on_axis(by_name[n], es[0][1], scale) for n in members):
+                uf.union(next(iter(members)), nbrs[0])
+                merged_pivots.append(sorted(members))
+                changed = True
+                break
             if len(nbrs) != 2 or not all(collinear(es[0][1], c) for _, c in es):
                 continue
             na, nb = nbrs
             if not any(o == nb and collinear(es[0][1], c) for o, c in by_comp.get(na, [])):
                 continue
-            members = {p.name for p in parts if uf.find(p.name) == comp_c}
             if len(members) * 2 > len(parts):
-                continue  # never dissolve the main body
+                continue
 
             def firmness(n):
                 side = {p.name for p in parts if uf.find(p.name) == n}
@@ -488,7 +477,11 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
             queue.append(nxt)
             parent, child = comp_name[cur], comp_name[nxt]
             jname = f"{parent}_to_{child}"
-            if c.type_hint == "revolute":
+            # a pin with some free length is a pivot; only a long guide rod (free > 12 radii) slides
+            slide = c.type_hint != "revolute" and c.shaft_length > 12 * c.radius
+            if not slide:
+                if c.type_hint != "revolute":
+                    review.append(f"joints.{jname}: cylindrical fit (slide OR spin) on a short pin drafted as revolute")
                 j = {"type": "revolute", "parent": parent, "child": child, "limits": [-3.1416, 3.1416],
                      "effort": 10.0, "velocity": 5.0}
                 review.append(f"joints.{jname}.limits: placeholder +/-pi")
@@ -502,7 +495,6 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
     orphans = [comp_name[r] for r in groups if r not in seen]
     links = {comp_name[r]: sorted(p.name for p in ps) for r, ps in groups.items() if r in seen}
     if orphans:
-        # attach to root by a fixed relation: merge their parts into the root link
         for r in groups:
             if r not in seen:
                 links[comp_name[root]] += sorted(p.name for p in groups[r])

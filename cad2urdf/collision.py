@@ -1,21 +1,11 @@
-"""Collision geometry for multi-part links, at a per-link granularity.
+"""Collision geometry per link. Modes, set per link in the spec (``collision: {default: {mode: ...}}``):
 
-Modes (cheapest -> most faithful), selected per link in the spec:
+none, box (one OBB), spheres (a few per part), primitives (box/cylinder/sphere per part, else hull),
+hull (one per link), auto (default: primitive, small-part hull, else CoACD, per part),
+decompose (CoACD on the whole link), mesh (raw visual mesh), keep (the input URDF's own collisions).
 
-none        nothing
-box         one oriented bounding box around the whole link
-auto        per part: primitive if it fills >= 80 %, hull if small or nearly
-            convex, else CoACD on that part (the router's default)
-primitives  one box/cylinder/sphere per *part* (tightest bounding primitive),
-            tiny parts culled; falls back to that part's convex hull when no
-            primitive fills it well
-hull        one convex hull of the whole link, vertex-capped
-decompose   CoACD approximate convex decomposition of the whole link
-mesh        the raw visual mesh (most engines silently convexify it -> avoid)
-keep        the collision elements already present in an input URDF
-
-Every convex piece is capped at ``max_hull_vertices`` (PhysX GPU cooking
-limit is 64; MuJoCo and Bullet accept more but gain nothing from it).
+Every piece is convex and capped at ``max_hull_vertices`` (64: PhysX GPU limit). Each link then gets a
+budget: ``max_geoms`` pieces (default 8), one for links under ``small_link_fraction`` of the robot's volume.
 """
 
 from __future__ import annotations
@@ -27,11 +17,7 @@ from .model import CollisionGeom, Link, Robot, _per
 
 
 def _cap_vertices(hull: trimesh.Trimesh, max_vertices: int) -> trimesh.Trimesh:
-    """Reduce a convex hull to <= max_vertices by farthest-point sampling its vertices.
-
-    The result is inscribed in the original hull; we then scale it about its
-    centroid so it recovers the original volume (a cheap, slightly conservative fix).
-    """
+    """Farthest-point-sample a hull down to ``max_vertices``, rescaled to keep the original volume."""
     v = hull.vertices
     if len(v) <= max_vertices:
         return hull
@@ -126,18 +112,17 @@ def link_collisions(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
     if mode == "auto":
         from_urdf = all(p.shape is None for p in link.parts)
         if from_urdf and link.mass <= 0:
-            return []  # massless link from an input URDF: a frame or decoration (stickers, lightbars)
+            return []  # massless link from an input URDF: a frame or decoration
         return _auto(link, cfg, max_v)
     if mode == "decompose":
         return _coacd(whole, cfg, max_v, "coacd")
+    if mode == "spheres":
+        return _spheres(link, cfg)
     raise ValueError(f"unknown collision mode {mode!r}")
 
 
 def _auto(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
-    """Per part: primitive if it fills well, else a hull if the part is small, else CoACD on that part.
-
-    Deterministic (CoACD seed 0). Works for STEP parts and for an exporter URDF's per-visual parts.
-    """
+    """Per part: a primitive if it fills >= min_fill, a hull if small or nearly convex, else CoACD."""
     total = sum(p.volume for p in link.parts) or 1.0
     min_frac = cfg.get("min_part_fraction", 0.02)
     min_fill = cfg.get("min_fill", 0.8)
@@ -160,9 +145,27 @@ def _auto(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
     return out
 
 
+def _spheres(link: Link, cfg: dict) -> list[CollisionGeom]:
+    """A few spheres per significant part, ``max_spheres`` per link shared by surface area."""
+    from .simplify import fit_spheres
+
+    total = sum(p.volume for p in link.parts) or 1.0
+    min_frac = cfg.get("min_part_fraction", 0.02)
+    budget = cfg.get("max_spheres", 32)
+    kept = [p for p in link.parts if p.mesh is not None and p.volume >= min_frac * total]
+    area = sum(p.mesh.area for p in kept) or 1.0
+    out = []
+    for p in kept:
+        n = max(1, round(budget * p.mesh.area / area))
+        for i, (c, r) in enumerate(fit_spheres(link.to_link(p.mesh), n, cfg.get("resolution", 24))):
+            T = np.eye(4)
+            T[:3, 3] = c
+            out.append(CollisionGeom("sphere", T, (r,), source=f"{p.name} sphere {i}"))
+    return out
+
+
 def _coacd(mesh: trimesh.Trimesh, cfg: dict, max_v: int, tag: str) -> list[CollisionGeom]:
-    # Imported lazily: loading coacd's native library before OpenCascade (build123d) makes
-    # import_step segfault in the same process.
+    # lazy: importing coacd before OpenCascade makes import_step segfault
     import coacd
 
     parts = coacd.run_coacd(
@@ -217,10 +220,45 @@ def metrics(link: Link, n: int = 60000, seed: int = 0) -> dict:
     }
 
 
+def _merge_to_budget(geoms: list[CollisionGeom], budget: int, max_v: int) -> list[CollisionGeom]:
+    """Merge pieces pairwise (least added hull volume, among 6 nearest neighbours) down to ``budget``."""
+    if len(geoms) <= budget:
+        return geoms
+    pieces = [(geom_to_mesh(g).convex_hull, g) for g in geoms]
+    while len(pieces) > budget:
+        cents = np.array([m.centroid for m, _ in pieces])
+        best = None
+        for i in range(len(pieces)):
+            order = np.argsort(np.linalg.norm(cents - cents[i], axis=1))[1:7]
+            for j in order:
+                if j < i and i in np.argsort(np.linalg.norm(cents - cents[j], axis=1))[1:7]:
+                    continue  # pair already scored from j's side
+                hull = trimesh.Trimesh(np.vstack([pieces[i][0].vertices, pieces[j][0].vertices])).convex_hull
+                waste = hull.volume - pieces[i][0].volume - pieces[j][0].volume
+                if best is None or waste < best[0]:
+                    best = (waste, i, int(j), hull)
+        _, i, j, hull = best
+        for k in sorted((i, j), reverse=True):
+            pieces.pop(k)
+        pieces.append((hull, None))
+    return [g if g is not None else _hull_geom(m, max_v, "merged hull") for m, g in pieces]
+
+
 def build_collisions(robot: Robot, with_metrics: bool = True) -> None:
+    """Collision geometry for every link, then the per-link budget (see the module docstring)."""
     spec = robot.spec.get("collision", {})
     max_v = spec.get("max_hull_vertices", 64)
+    total = sum(p.volume for link in robot.links.values() for p in link.parts) or 1.0
     for link in robot.links.values():
-        link.collisions = link_collisions(link, _per(spec, link.name), max_v)
+        cfg = _per(spec, link.name)
+        link.collisions = link_collisions(link, cfg, max_v)
+        if link.collision_mode in ("auto", "decompose", "primitives") and link.collisions:
+            small = sum(p.volume for p in link.parts) < cfg.get("small_link_fraction", 0.005) * total
+            budget = 1 if small else cfg.get("max_geoms", 8)
+            if len(link.collisions) > budget and budget == 1:
+                g, fill = _best_primitive(link.mesh())
+                link.collisions = [g] if fill >= cfg.get("min_fill", 0.8) else [_hull_geom(link.mesh(), max_v, "small link hull")]
+            else:
+                link.collisions = _merge_to_budget(link.collisions, budget, max_v)
         if with_metrics and link.collisions and link.parts:
             link.collision_metrics = metrics(link)

@@ -1,14 +1,9 @@
-"""Load the generated files in every simulator available locally and check what each one reads.
+"""Load the outputs in each installed simulator and check them.
 
-    python -m cad2urdf.validate OUTDIR [--sims mujoco,pybullet,sapien,maniskill,yourdfpy]
+    python -m cad2urdf.validate OUTDIR [--sims yourdfpy,mujoco,pybullet,sapien,maniskill,gazebo,isaac]
 
-Robot-agnostic: every check drives the actuated joints to the same modest test
-pose (from 0 by min(0.4 rad | 2 cm, 30 % of the range), 0.4 rad for continuous
-joints, mimic joints following their leader) and reports tracking error, stability and mimic error.
-
-Checks: MuJoCo (URDF import and native MJCF), PyBullet, SAPIEN, ManiSkill 3
-(through the generated agent, GPU if available) and yourdfpy.
-Isaac Sim/Lab and Gazebo are not exercised here.
+Every check drives the position-controlled joints to the same small test pose and reports tracking error,
+stability and mimic error. Isaac Sim only runs when named in --sims.
 """
 
 from __future__ import annotations
@@ -22,6 +17,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
+
+from .util import meminfo_gb
 
 
 # ---------------------------------------------------------------- URDF helpers
@@ -38,10 +35,22 @@ def _urdf_joints(urdf: Path) -> list[dict]:
     return out
 
 
+def _position_joints(urdf: Path) -> set[str] | None:
+    """Joints with a position actuator in the MJCF written next to this URDF (None: no MJCF to ask).
+    Passive joints (rollers) and velocity-driven ones (wheels) have no position target to track."""
+    xmls = [x for x in (urdf.parent / "mjcf").glob("*.xml") if not x.name.startswith("_")]
+    if not xmls:
+        return None
+    act = ET.parse(xmls[0]).getroot().find("actuator")
+    return {a.get("joint") for a in act.findall("position")} if act is not None else set()
+
+
 def test_pose(urdf: Path) -> dict[str, float]:
-    """Target for every non-fixed joint (mimic followers included)."""
+    """Target for every position-controlled joint (mimic followers included)."""
     q = {}
-    joints = [j for j in _urdf_joints(urdf) if j["type"] != "fixed"]
+    controlled = _position_joints(urdf)
+    joints = [j for j in _urdf_joints(urdf) if j["type"] != "fixed"
+              and (controlled is None or j["name"] in controlled or j["mimic"])]
     for j in joints:
         if j["mimic"] is None:
             if j["type"] == "continuous":
@@ -50,7 +59,7 @@ def test_pose(urdf: Path) -> dict[str, float]:
             lo, hi = j["lower"], j["upper"]
             mid = 0.0 if lo <= 0.0 <= hi else (lo + hi) / 2
             step = min(0.4 if j["type"] == "revolute" else 0.02, 0.3 * (hi - lo))
-            # step towards whichever side has room (a range like [-0.11, 0] must be tested downwards)
+            # step towards whichever side has room
             q[j["name"]] = float(mid + step if mid + step <= hi else max(mid - step, lo))
     for j in joints:
         if j["mimic"]:
@@ -160,7 +169,7 @@ def check_mujoco_mjcf(xml: Path, urdf: Path) -> dict:
     act = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i) for i in range(m.nu)]
     for i, name in enumerate(act):
         jid = m.actuator_trnid[i, 0]
-        d.ctrl[i] = target.get(mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, jid), 0.0)
+        d.ctrl[i] = target.get(mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, jid), 0.0)  # velocity actuators: 0
     for _ in range(int(3.0 / m.opt.timestep)):
         mujoco.mj_step(m, d)
     q = {}
@@ -192,8 +201,7 @@ def check_pybullet(urdf: Path, fixed: bool) -> dict:
     info = [p.getJointInfo(rid, i) for i in range(n)]
     idx = {i[1].decode(): i[0] for i in info}
     lname = {i[0]: i[12].decode() for i in info}
-    # apply the SRDF's disabled pairs, as a real PyBullet user would (PyBullet doesn't read SRDF itself);
-    # without it, parts that overlap at rest by design (nested rings, rollers in wheels) blow apart
+    # PyBullet doesn't read SRDF: apply its disabled pairs, or parts nested by design blow apart
     link_idx = {v: k for k, v in lname.items()}
     link_idx[ET.parse(urdf).getroot().find("link").get("name")] = -1  # base link
     srdf = urdf.with_suffix(".srdf")
@@ -369,15 +377,19 @@ def check_gazebo(urdf: Path, fixed: bool, steps: int = 2000) -> dict:
             **({"mimic_dropped (Gazebo Classic needs a plugin)": mimic} if mimic else {})}
 
 
+
 def isaac_python() -> Path | None:
-    """Isaac Sim lives in its own environment (it pins its own Python); find its interpreter."""
+    """The interpreter that has Isaac Sim: CAD2URDF_ISAAC_PYTHON, else this one (scripts/setup_venv.sh --isaac
+    puts Isaac Sim in the repo's single .venv). The probe always runs in a subprocess."""
+    import importlib.util
     import os
+    import sys
 
     env = os.environ.get("CAD2URDF_ISAAC_PYTHON")
-    root = Path(__file__).resolve().parents[1]
-    for c in ([Path(env)] if env else []) + [root / ".venv-isaac6/bin/python", root / ".venv-isaac/bin/python"]:
-        if c.exists():
-            return c
+    if env:
+        return Path(env) if Path(env).exists() else None
+    if importlib.util.find_spec("isaacsim") is not None:
+        return Path(sys.executable)
     return None
 
 
@@ -385,9 +397,14 @@ def check_isaac(urdf: Path, fixed: bool) -> dict:
     """Isaac Sim: import with its URDF importer (as Isaac Lab's UrdfFileCfg does), drive, step PhysX."""
     import os
 
+    avail_gb = meminfo_gb("MemAvailable")
+    need_gb = float(os.environ.get("CAD2URDF_ISAAC_MIN_FREE_GB", "10"))
+    if avail_gb < need_gb:
+        return {"skipped": f"Isaac Sim needs ~8 GB and only {avail_gb:.1f} GB is free (< {need_gb:g} GB): close "
+                           "other apps or set CAD2URDF_ISAAC_MIN_FREE_GB"}
     py = isaac_python()
     if py is None:
-        return {"skipped": "no Isaac Sim environment (.venv-isaac6 / CAD2URDF_ISAAC_PYTHON)"}
+        return {"skipped": "Isaac Sim not installed (scripts/setup_venv.sh --isaac, or set CAD2URDF_ISAAC_PYTHON)"}
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "DISPLAY", "WAYLAND_DISPLAY")}
     env.update(OMNI_KIT_ACCEPT_EULA="YES")
     icd = Path("/usr/share/vulkan/icd.d/nvidia_icd.json")
@@ -481,8 +498,8 @@ def check_maniskill(out: Path, urdf: Path) -> dict:
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("out", nargs="?", default="examples/arm4/output")
-    ap.add_argument("--sims", default="yourdfpy,mujoco,pybullet,sapien,maniskill,gazebo"
-                    + (",isaac" if isaac_python() else ""))
+    # Isaac Sim (~8 GB of RAM) only runs when asked for: --sims ...,isaac
+    ap.add_argument("--sims", default="yourdfpy,mujoco,pybullet,sapien,maniskill,gazebo")
     args = ap.parse_args(argv)
     out = Path(args.out)
     urdf = next(p for p in out.glob("*.urdf") if not p.name.startswith("_"))

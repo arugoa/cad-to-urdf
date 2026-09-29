@@ -77,6 +77,29 @@ Where to get the answers:
 
 Link and joint names come from part names. Rename them by editing the draft into a full spec (with `links:` and `joints:`) and passing that as `--spec`.
 
+### 4b. When the draft can't find the joints
+
+Signs: one giant link, joints that each move a single small solid, or `0 joints` on something that obviously moves. This happens when the CAD doesn't model the joint as a shaft in a bore. Common cases: motors or joint modules butted flat against a link, pivots modelled at zero clearance, V-wheel slides. Do not guess axes. Get them from the geometry:
+
+```bash
+python -m cad2urdf.inspect_step robot.step                  # solids grouped by part name
+python -m cad2urdf.inspect_step robot.step --spec spec.yaml # grouped by your links
+```
+
+For each pair of part groups it prints the touching solids and every *shared axis*: coaxial cylindrical faces on both sides, at any radius or clearance, with spec-ready `axis:` / `origin:` (CAD units).
+
+To write the spec:
+1. **Links:** group the parts by the names (`0200_big_arm`, `J6`, `finger_left`, ...) using `fnmatch` patterns.
+2. **Joints:** a joint module or motor is a *dense* shared axis, dozens to hundreds of face pairs over many radii. A bolt pattern is 1–3 face pairs of small radius. A cap on a tube is also dense but plainly fixed (read the names).
+3. **Copy values:** give every joint explicit `axis` and `origin` from the inspector, so nothing is inferred.
+4. **Orientation:** if the base joint's axis is +Y, the export is Y-up. Add `root_rpy: [1.5708, 0, 0]`.
+5. **Passive spring loops** (gas springs, balance cylinders) can't close in a URDF tree. Put the barrel on one link and the rod on the other, and say so.
+6. **Save the spec next to the STEP** (`<name>.spec.yaml`, `source:` relative) and build with `python -m cad2urdf <spec> -o build/<robot>`.
+
+Worked example: `examples/random_step/Haro380.spec.yaml`.
+
+Onshape loops: mates named `closing_*` are loop closures (MJCF `<equality connect>`). Joints inside the loop become passive; only joints on the base keep motors. If a parallel mechanism's loop isn't closed in Onshape, ask the user to rename the closing mate `closing_<name>`.
+
 ## 5. Read validation.json and iterate
 
 | Symptom | Likely cause | Fix in the spec |

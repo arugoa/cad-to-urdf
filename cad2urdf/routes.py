@@ -1,16 +1,5 @@
-"""Deterministic routing: (CAD software, export format, simulator) -> conversion plan.
-
-    python -m cad2urdf.route --cad onshape --format native --sim maniskill            # print the plan
-    python -m cad2urdf.route --cad onshape --format native --sim maniskill --run ...  # and execute it
-
-Layer 1 (CAD) + layer 2 (format) choose the FRONT END: the tool that reads the CAD
-and gives us links, joints, limits, inertia and per-part meshes. Where a mature
-exporter exists we use it (it reads real mates); STEP is the universal fallback
-(geometric joint inference + a spec).
-
-Layer 3 (simulator) chooses the FINISH: collision defaults, which files to
-write, and which checks to run. The finish is always cad2urdf's own compiler, so
-every route ends in the same validated outputs.
+"""Routing table: (CAD, format) picks the front end, the simulator picks the collision defaults and checks.
+Every route ends in cad2urdf's own compiler.
 """
 
 from __future__ import annotations

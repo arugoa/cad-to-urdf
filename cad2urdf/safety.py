@@ -1,17 +1,8 @@
-"""Keep big conversions from running the machine out of memory.
+"""Out-of-memory protection for heavy entry points.
 
-Every heavy entry point (route, the compiler, scene, validate, the viewer) calls ``sandbox()`` first.
-It re-launches the command inside the systemd user slice ``cad2urdf.slice``, which has:
-
-* ONE shared memory cap for all cad2urdf jobs together: total RAM minus ``CAD2URDF_RESERVE_GB``
-  (default 5 GB), no swap. Running a batch, a validation and a viewer at the same time can't add up
-  past it. Over the cap, only cad2urdf processes are killed (exit 137); the rest of the desktop is untouched.
-* ``oom_score_adj = 1000`` for every cad2urdf process, so that if the machine still runs out of memory
-  for another reason, the kernel kills our jobs before your editor or browser.
-* ``nice 19``: every idle core is used, but other apps win whenever they need CPU.
-
-Set ``CAD2URDF_NO_SANDBOX=1`` to disable (CI, containers). Without systemd user scopes it still renices
-and raises the OOM score, but can't enforce the cap.
+``sandbox()`` re-launches the command in the systemd user slice ``cad2urdf.slice``: one memory cap shared
+by all cad2urdf jobs (RAM minus ``CAD2URDF_RESERVE_GB``, default half the RAM; no swap), oom_score_adj
+1000 so the kernel kills these jobs first, and nice 19. ``CAD2URDF_NO_SANDBOX=1`` disables it.
 """
 
 from __future__ import annotations
@@ -21,16 +12,11 @@ import shutil
 import subprocess
 import sys
 
+from .util import meminfo_gb
+
 _MARK = "CAD2URDF_SANDBOXED"
 SLICE = "cad2urdf.slice"
 
-
-def _mem_total_kb() -> int:
-    with open("/proc/meminfo") as f:
-        for line in f:
-            if line.startswith("MemTotal:"):
-                return int(line.split()[1])
-    return 0
 
 
 def prefer_oom_kill() -> None:
@@ -43,8 +29,10 @@ def prefer_oom_kill() -> None:
 
 
 def cap_kb() -> int:
-    reserve_gb = float(os.environ.get("CAD2URDF_RESERVE_GB", "5"))
-    return max(int(_mem_total_kb() - reserve_gb * 1024 * 1024), 1024 * 1024)
+    total = int(meminfo_gb("MemTotal") * 1024 * 1024)
+    default = max(5.0, total / 2 / 1024 / 1024)  # leave at least half the RAM to the desktop (VS Code, browser)
+    reserve_gb = float(os.environ.get("CAD2URDF_RESERVE_GB", default))
+    return max(int(total - reserve_gb * 1024 * 1024), 1024 * 1024)
 
 
 def _have_scopes() -> bool:

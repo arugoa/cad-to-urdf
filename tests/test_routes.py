@@ -70,3 +70,56 @@ def test_rotated_frames_survive_ingest(tmp_path):
         x.update_cfg({"j": q})
         y.update_cfg({"j": q})
         np.testing.assert_allclose(x.get_transform("b"), y.get_transform("b"), atol=1e-9)
+
+
+def test_spec_closure_becomes_mjcf_connect(tmp_path):
+    """A `closures:` entry (e.g. a gas spring's rod end) is a point constraint between two links in MJCF."""
+    import mujoco
+    import yaml
+
+    from cad2urdf import mjcf
+
+    spec = yaml.safe_load((ARM4 / "robot_spec.yaml").read_text())
+    spec["source"] = str((ARM4 / spec["source"]).resolve())
+    spec["closures"] = {"finger_tie": {"link1": "finger_left", "link2": "gripper_base", "point": [0, 0, 400]}}
+    (tmp_path / "spec.yaml").write_text(yaml.safe_dump(spec))
+    r = model.build(tmp_path / "spec.yaml")
+    urdf.export_meshes(r, tmp_path / "meshes")
+    mjcf.write_mjcf(r, tmp_path / "mjcf" / "r.xml", meshdir="../meshes")
+    m = mujoco.MjModel.from_xml_path(str(tmp_path / "mjcf" / "r.xml"))
+    assert m.neq >= 1 and m.eq_type[0] == mujoco.mjtEq.mjEQ_CONNECT
+    d = mujoco.MjData(m)
+    mujoco.mj_forward(m, d)
+    b1, b2 = m.eq_obj1id[0], m.eq_obj2id[0]
+    p1 = d.xpos[b1] + d.xmat[b1].reshape(3, 3) @ m.eq_data[0, 0:3]
+    p2 = d.xpos[b2] + d.xmat[b2].reshape(3, 3) @ m.eq_data[0, 3:6]
+    np.testing.assert_allclose(p1, p2, atol=1e-9)
+    np.testing.assert_allclose(p1, [0, 0, 0.4], atol=1e-9)
+
+
+def test_root_rpy_reaches_the_urdf(tmp_path):
+    """root_rpy must rotate the robot in the URDF too (a URDF root link can't carry an orientation)."""
+    import yaml
+    from scipy.spatial.transform import Rotation
+
+    spec = yaml.safe_load((ARM4 / "robot_spec.yaml").read_text())
+    spec["source"] = str((ARM4 / spec["source"]).resolve())
+    out = {}
+    for tag, rpy in (("plain", None), ("rot", [np.pi / 2, 0, 0])):
+        s = dict(spec, root_rpy=rpy) if rpy else spec
+        (tmp_path / f"{tag}.yaml").write_text(yaml.safe_dump(s))
+        r = model.build(tmp_path / f"{tag}.yaml")
+        urdf.export_meshes(r, tmp_path / tag / "meshes")
+        urdf.write_urdf(r, tmp_path / tag / "r.urdf", mesh_prefix="meshes")
+        out[tag] = yourdfpy.URDF.load(str(tmp_path / tag / "r.urdf"), load_meshes=True)
+    R = Rotation.from_euler("xyz", [np.pi / 2, 0, 0]).as_matrix()
+    a, b = out["plain"], out["rot"]
+    root = a.base_link
+    for link in a.link_map:
+        pa = a.get_transform(link, root)[:3, 3]
+        pb = b.get_transform(link, b.base_link)[:3, 3]
+        np.testing.assert_allclose(pb - b.get_transform(root, b.base_link)[:3, 3], R @ pa, atol=1e-5)
+    lo_a, hi_a = a.scene.bounds
+    lo_b, hi_b = b.scene.bounds
+    np.testing.assert_allclose(sorted(hi_b - lo_b), sorted(hi_a - lo_a), rtol=1e-3)
+    np.testing.assert_allclose(np.abs(R @ (hi_a - lo_a)), hi_b - lo_b, rtol=1e-3)  # extents actually rotated

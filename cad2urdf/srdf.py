@@ -1,13 +1,7 @@
-"""SRDF writer with a sampled self-collision matrix (MoveIt Setup Assistant style).
+"""SRDF writer with a self-collision matrix sampled in MuJoCo on the collision geometry.
 
-The collision matrix is computed once, on the *collision* geometry, with
-MuJoCo as the collision checker, then written into the SRDF and re-used by
-every other target (MJCF <contact><exclude>, Isaac filtered pairs, SAPIEN
-collision groups).
-
-Reasons follow MoveIt: Adjacent (parent/child), Default (touching in the
-default pose), Always (touching in >= 95 % of samples), Never (never touching
-in any sample). Beware: SAPIEN/ManiSkill only honours reason="Default".
+Reasons follow MoveIt (Adjacent, Default, Always, Never); the matrix also feeds MJCF excludes and the
+other simulators' filters. SAPIEN/ManiSkill only honour reason="Default".
 """
 
 from __future__ import annotations
@@ -33,8 +27,7 @@ def expand_mimic(robot: Robot, q: dict[str, float]) -> dict[str, float]:
     return q
 
 
-# Pairs closer than this count as touching. Other engines (PyBullet, PhysX) add contact margins, so
-# parts that sit flush in CAD register as colliding there even when MuJoCo sees no penetration.
+# pairs closer than this count as touching (PyBullet/PhysX contact margins see flush parts as colliding)
 TOUCH_MARGIN = 1e-3
 
 

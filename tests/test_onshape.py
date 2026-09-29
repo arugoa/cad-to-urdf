@@ -165,3 +165,50 @@ def test_dof_convention_patterns_and_origin_mates():
     base = {p.name.split("/")[1] for p in r.links["base_link"].parts}
     assert {"post", "post_copy"} <= base  # pattern copy rigid with its seed
     assert any("single entity" in x for x in r.review)
+
+
+class ClosingFakeClient(FakeClient):
+    """A closing_ mate (onshape-to-robot's loop-closure convention) between the carriage and the base."""
+
+    def get(self, path, params=None, binary=False):
+        if "/assemblies/" in path and not path.endswith("/features"):
+            a = json.loads(json.dumps(ASSEMBLY))
+            a["rootAssembly"]["features"].append(
+                mate("f9", "closing_carriage", "REVOLUTE", ["i_slide"], cs((0, 0, 0), z=(0, 1, 0)),
+                     ["i_plate"], cs((0.2, 0, 0.30), z=(0, 1, 0))))
+            return a
+        return super().get(path, params, binary)
+
+
+def test_closing_mate_becomes_loop_constraint(tmp_path):
+    import mujoco
+
+    from cad2urdf import collision, mjcf, urdf
+
+    spec = {"source": URL, "actuators": {"default": {"kind": "position", "kp": 50, "kv": 1}}}
+    r = onshape.build_from_onshape(spec, None, client=ClosingFakeClient())
+    assert sorted(r.joints) == ["carriage_slide", "shoulder"]  # the closing mate is not a tree joint
+    (c,) = r.closures
+    assert {c["link1"], c["link2"]} == {"carriage", "base_link"}
+    assert r.joints["shoulder"].actuator.get("kind") == "position"  # on the base: the motor
+    assert r.joints["carriage_slide"].actuator == {"kind": "none"}  # inside the loop: passive
+    collision.build_collisions(r, with_metrics=False)
+    urdf.export_meshes(r, tmp_path / "meshes")
+    mjcf.write_mjcf(r, tmp_path / "mjcf" / "r.xml", meshdir="../meshes")
+    m = mujoco.MjModel.from_xml_path(str(tmp_path / "mjcf" / "r.xml"))
+    assert m.neq == 1 and m.eq_type[0] == mujoco.mjtEq.mjEQ_CONNECT and m.nu == 1
+    d = mujoco.MjData(m)
+    mujoco.mj_forward(m, d)
+    b1, b2 = m.eq_obj1id[0], m.eq_obj2id[0]
+    p1 = d.xpos[b1] + d.xmat[b1].reshape(3, 3) @ m.eq_data[0, 0:3]
+    p2 = d.xpos[b2] + d.xmat[b2].reshape(3, 3) @ m.eq_data[0, 3:6]
+    np.testing.assert_allclose(p1, p2, atol=1e-9)  # assembled pose satisfies the loop
+    np.testing.assert_allclose(p1, [0.2, 0, 0.30], atol=1e-9)
+
+
+def test_joint_name_conventions_for_actuators():
+    spec = {"actuators": {"default": {"kind": "position", "kp": 100, "kv": 5}, "wheel2_passive3": {"kind": "position", "kp": 1}}}
+    assert onshape._named_actuator("wheel1_passive7", spec) == {"kind": "none"}  # free roller
+    assert onshape._named_actuator("wheel1_speed", spec)["kind"] == "velocity"  # drive wheel
+    assert onshape._named_actuator("left_knee", spec)["kind"] == "position"
+    assert onshape._named_actuator("wheel2_passive3", spec)["kp"] == 1  # an explicit spec entry wins

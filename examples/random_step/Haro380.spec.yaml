@@ -1,0 +1,49 @@
+# Haro380 arm, spec written by hand: the draft can't see its joint modules (no shaft/bore fits).
+# Links follow the part names; axis/origin (mm) come from `python -m cad2urdf.inspect_step Haro380.step`.
+# Limits are placeholders.
+robot: haro380
+source: Haro380.step
+units: mm
+root_rpy: [1.5708, 0, 0]  # Y-up CAD (J1's axis is +Y) -> Z-up simulators
+materials:
+  pla: 1240
+part_materials:
+  '*': pla
+links:
+  base: ['0101_fixed_base*', 'PLA_0101-04*']
+  turntable: ['0102_rotated_base*', 'DZ-01*']   # DZ-01: the pump's tail shaft, fixed in the turntable
+  upper_arm: ['0200_big_arm*']
+  # pump (balance cylinder, 平衡缸): passive gas spring, barrel on the turntable, rod on the upper arm
+  pump_barrel: ['0400-03*', '0400-04*', '0400-05*', 'WG-01*']
+  pump_rod: ['0400-02*', '0400-01*']
+  forearm: ['0300_little_arm*']
+  wrist: ['0302_J501*']
+  wrist_roll: ['0303_J6*']
+  flange: ['0303-04_end_flange_for_J6*']
+joints:
+  j1: {type: revolute, parent: base, child: turntable, axis: [0, 1, 0], origin: [0, 27.75, 0],
+       limits: [-3.14, 3.14], effort: 10, velocity: 3}
+  j2: {type: revolute, parent: turntable, child: upper_arm, axis: [-0.2258, 0, 0.9742], origin: [49.25, 100.0, 17.83],
+       limits: [-1.57, 1.57], effort: 10, velocity: 3}
+  j3: {type: revolute, parent: upper_arm, child: forearm, axis: [-0.2258, 0, 0.9742], origin: [9.97, 229.98, 10.01],
+       limits: [-2.4, 2.4], effort: 10, velocity: 3}
+  j4: {type: revolute, parent: forearm, child: wrist, axis: [0.9738, 0.0278, 0.2258], origin: [98.4, 232.45, 22.81],
+       limits: [-3.14, 3.14], effort: 5, velocity: 5}
+  j5: {type: revolute, parent: wrist, child: wrist_roll, axis: [-0.2262, 0.0162, 0.9739], origin: [212.96, 235.61, 43.98],
+       limits: [-2.0, 2.0], effort: 5, velocity: 5}
+  j6: {type: revolute, parent: wrist_roll, child: flange, axis: [-0.6587, 0.734, -0.1652], origin: [221.82, 224.5, 51.61],
+       limits: [-3.14, 3.14], effort: 2, velocity: 6}
+  pump_pivot: {type: revolute, parent: turntable, child: pump_barrel, axis: [-0.2258, 0, 0.9742], origin: [-61.95, 87.0, 1.55],
+               limits: [-1.0, 1.0]}
+  pump_slide: {type: prismatic, parent: pump_barrel, child: pump_rod, axis: [0.9739, 0.022, 0.2258], origin: [-25.71, 87.97, 41.77],
+               limits: [-0.04, 0.04]}
+closures:  # rod-end hinge on the upper arm (inspector: 0200_big_arm <-> 0400-01 shared axis)
+  pump_hinge: {link1: upper_arm, link2: pump_rod, point: [14.91, 88.89, 51.34]}
+dynamics:
+  default: {damping: 0.1, friction: 0.01, armature: 0.001}
+actuators:
+  default: {kind: position, kp: 50.0, kv: 2.0}
+  pump_pivot: {kind: none}   # passive: the loop drives them
+  pump_slide: {kind: none}
+collision:
+  default: {mode: auto, min_part_fraction: 0.02}

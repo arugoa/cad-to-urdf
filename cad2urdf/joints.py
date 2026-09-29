@@ -1,23 +1,9 @@
-"""Geometric joint inference from a mate-less B-rep assembly.
+"""Joint candidates from geometry: a shaft inside a bore on two different links.
 
-Idea: a joint in a real mechanism almost always shows up as a *shaft inside a
-bore* — two cylindrical faces on different rigid bodies that are coaxial, have
-(nearly) the same radius and overlap along the axis. That signature survives
-STEP export even though the CAD mates do not.
-
-For each pair of links we collect such shaft/bore matches, merge the collinear
-ones (a pin through two clevis plates gives two matches on one axis), and emit a
-candidate with an axis, an origin on that axis and a type hint:
-
-* ``revolute``     the shaft's free length (not buried in its own link's
-                   press-fit bores) is about the engagement length -> it spins
-* ``cylindrical``  the free shaft is much longer than the bore -> it could slide
-                   *or* spin (e.g. a linear rail); the spec must disambiguate
-
-Limits: planar/prismatic joints on flat ways, ball joints, belt/gear
-transmissions and flexures have no shaft/bore signature and need the spec (or
-native CAD mates). Parts in the same link are ignored, which is why link
-grouping happens first.
+Coaxial cylindrical faces of (nearly) equal radius that overlap along the axis survive STEP export even
+though mates don't. Collinear matches merge into one candidate with an axis, origin and hint:
+``revolute`` (free shaft about the engagement length) or ``cylindrical`` (long free shaft: slide or spin).
+Flat slides, ball joints and belt/gear drives have no such signature.
 """
 
 from __future__ import annotations
@@ -81,8 +67,7 @@ def cylindrical_faces(part: Part, unit_scale: float) -> list[CylFace]:
     for f in part.shape.faces():
         if f.geom_type != GeomType.CYLINDER:
             continue
-        # read the analytic cylinder from OpenCascade directly: build123d's Face.radius returns None
-        # for many exported cylinders (e.g. every bearing race in a SolidWorks->Onshape->STEP chassis)
+        # read the cylinder from OpenCascade: build123d's Face.radius is None for many exported faces
         try:
             cyl = BRepAdaptor_Surface(f.wrapped).Cylinder()
         except Exception:  # noqa: BLE001  (not an analytic cylinder after all)
@@ -91,7 +76,7 @@ def cylindrical_faces(part: Part, unit_scale: float) -> list[CylFace]:
         radius = cyl.Radius()
         p0 = np.array([ax.Location().X(), ax.Location().Y(), ax.Location().Z()]) * unit_scale
         d = _canonical(np.array([ax.Direction().X(), ax.Direction().Y(), ax.Direction().Z()]))
-        # project the axis point to the foot of the perpendicular from the world origin
+        # axis point closest to the origin, so coaxial faces share it
         p0 = p0 - np.dot(p0, d) * d
         verts = np.array([_v(v) for v in f.vertices()]).reshape(-1, 3) * unit_scale
         if len(verts) == 0:  # full seamless cylinder: fall back to bounding box
@@ -121,11 +106,8 @@ def _coaxial(a: CylFace, b: CylFace, cos_tol: float, offset_tol: float) -> bool:
 
 
 class _coaxial_index:
-    """k-d tree over (direction, axis foot point, radius) so only near-coaxial faces are compared.
-
-    Brute force is O(F^2) in Python; a 1,000-part robot has ~20k cylindrical faces.
-    The tree radius is a superset of the exact tolerances, which are re-checked by the caller.
-    """
+    """k-d tree over (direction, axis point, radius): near-coaxial face pairs without an O(F^2) scan.
+    Its radius is looser than the exact tolerances, which the caller re-checks."""
 
     def __init__(self, faces, angle_tol_deg, offset_tol, radial_tol):
         from scipy.spatial import cKDTree
@@ -136,7 +118,6 @@ class _coaxial_index:
         self.r = offset_tol * 2.0
         self.id = {id(f): k for k, f in enumerate(faces)}
         pts = np.array([np.r_[f.direction * w_dir, f.point, f.radius * w_rad] for f in faces]).reshape(-1, 7)
-        # the axis foot point is only defined up to the sign of the (canonical) direction: fine
         self.tree = cKDTree(pts) if len(faces) else None
         self.pts = pts
 

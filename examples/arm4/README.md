@@ -1,12 +1,12 @@
 # Sample: `arm4`, a 4-DOF arm with a parallel gripper
 
-This is a worked example going from CAD to simulation files. Research context is in [`docs/RESEARCH.md` §8](../../docs/RESEARCH.md#8-worked-sample-arm4).
+A worked example from CAD to simulation files. Background is in [`docs/RESEARCH.md` §8](../../docs/RESEARCH.md#8-worked-sample-arm4).
 
 ## 1. The CAD
 
-`build_cad.py` models **24 named solids** parametrically with build123d (OpenCascade) in millimetres, posed at the zero configuration (arm straight up). It writes them as one STEP assembly: `cad/arm4.step`.
+`build_cad.py` models 24 named solids parametrically with build123d (OpenCascade) in millimetres, posed at the zero configuration (arm straight up). It writes them as one STEP assembly: `cad/arm4.step`.
 
-The STEP file keeps names, placements and exact B-rep, but **no mates**, just like STEP exports from Onshape, SolidWorks, Fusion or Creo. Every moving interface is a real shaft in a real bore with 0.2 mm diametral clearance. That geometric signature is what joint inference uses.
+Like any STEP export, the file keeps names, placements and exact geometry but no mates. Every moving interface is a shaft in a bore with 0.2 mm diametral clearance, which is what joint inference looks for.
 
 | Rigid group | Parts |
 |---|---|
@@ -19,16 +19,14 @@ The STEP file keeps names, placements and exact B-rep, but **no mates**, just li
 
 ## 2. The granularity spec
 
-`robot_spec.yaml` is the only hand-written (or LLM-written) input. It sets:
+`robot_spec.yaml` is the only hand-written input. It sets:
 
-- **Materials** and part→material patterns, which drive mass and inertia.
-- **Links** as part-name patterns.
-- **Joints**: type, limits, effort, velocity, sign, mimic. Axis and origin come from geometry.
-- **Dynamics**: damping, friction, armature.
-- **Actuators**: position servos with kp/kv.
-- **Contact** friction.
-- **Collision mode per link**, chosen from the collision study.
-- **SRDF semantics**: groups, named states, end effector, passive joints.
+- materials and part-to-material patterns (mass and inertia)
+- links as part-name patterns
+- joints: type, limits, effort, velocity, sign, mimic (axis and origin come from geometry)
+- dynamics (damping, friction, armature) and position actuators
+- contact friction and a collision mode per link
+- SRDF groups, named states, end effector and passive joints
 
 ## 3. Run
 
@@ -62,11 +60,11 @@ python -m cad2urdf.validate examples/arm4/output
 
 ## 5. Results
 
-**Joints recovered from geometry:** all 6. The rail interfaces come back as `cylindrical` (could slide or spin), and the spec resolves them to prismatic.
+Joints recovered from geometry: all 6. The rail interfaces come back as `cylindrical` (could slide or spin), and the spec resolves them to prismatic.
 
-**Collision** (IoU vs exact CAD volume): base 0.97, turret 0.81, upper arm 0.75, forearm 0.97, gripper base 0.85, fingers 0.98. That is 41 collision geoms in total, versus 10.5k visual triangles.
+Collision fit (IoU against the exact CAD volume): base 0.97, turret 0.81, upper arm 0.75, forearm 0.97, gripper base 0.85, fingers 0.98. That is 41 collision geoms in total, versus 10.5k visual triangles.
 
-**Validation:**
+Validation:
 
 | Target | Outcome |
 |---|---|
@@ -75,7 +73,7 @@ python -m cad2urdf.validate examples/arm4/output
 | PyBullet | needs `URDF_USE_INERTIA_FROM_FILE` (60% inertia error otherwise); mimic via gear constraint |
 | SAPIEN / ManiSkill | loads headless without visuals; reads SRDF but only applies `reason="Default"` pairs |
 | yourdfpy | loads; FK matches CAD |
-| ManiSkill 3.0.1 agent (RTX 3070 Ti) | CPU and GPU PhysX; 1,024 parallel envs at ~15.5k env-steps/s; reaches targets incl. mimic gripper (after fixing `normalize_action`) |
+| ManiSkill 3.0.1 agent (RTX 3070 Ti) | CPU and GPU PhysX; 1,024 parallel envs at ~15.5k env-steps/s; reaches the targets, mimic gripper included |
 | Gazebo Classic 11 (`gz sdf -p`) | URDF→SDF converts: 7 links, 7 joints, friction on every collision geom (not simulated: no `gazebo_ros2_control` installed) |
 
 ![collision modes](../../docs/img/collision_modes.png)

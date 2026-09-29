@@ -1,24 +1,10 @@
-"""Static scenery (competition fields, arenas) from STEP: surfaces welcome, no joints.
+"""Static scenery (competition fields, arenas) from STEP, including surface-only exports.
 
     python -m cad2urdf.scene field.step -o build/field [--units mm] [--no-validate]
 
-Robot exports are solids; field exports are often surface soups (hundreds of
-zero-thickness faces, e.g. meshes converted in Onshape). A robot route cannot
-use them, so this path is separate. Every rule is deterministic:
-
-* one "leaf" per STEP entity (solid or shell), tessellated in world metres;
-* geometric duplicates (same bounds and area to 1 mm / 1 cm^2) are dropped;
-* closed leaf: convex hull if it fills >= 90 % of its hull, else CoACD;
-* flat leaf (< 1 mm thick): a box ``thickness`` thick placed *behind* the face
-  (against its normal), so the walking surface stays exactly where the CAD has
-  it; flat leaves smaller than ``min_area`` (decals, stencils, bevels) get no
-  collision;
-* open non-flat leaf: its convex hull, or an oriented box if the hull is thin.
-
-Outputs: ``<name>.urdf`` (one fixed link), ``mjcf/<name>.xml`` (static world
-geoms, includable), ``maniskill/<name>_scene.py`` (``build_<name>(scene)`` for
-ManiSkill/SAPIEN actor builders), per-colour visual meshes (STL + GLB), convex
-collision STLs, ``report.json`` and a drop-test ``validation.json``.
+Per STEP entity: duplicates dropped; closed shapes get a hull (or CoACD if the hull fills < 90 %); flat
+faces get a thin box behind the face (none under ``min_area``); other open shapes a hull or box.
+Writes a one-link URDF, an includable MJCF, a ManiSkill scene builder, meshes, report and a drop test.
 """
 
 from __future__ import annotations
@@ -37,7 +23,7 @@ import trimesh
 from . import cad
 from .collision import _cap_vertices, _coacd, proper_frame
 from .model import CollisionGeom
-from .urdf import fmt, rpy
+from .util import fmt, quat, rpy
 
 
 @dataclass
@@ -190,12 +176,6 @@ def _write_urdf(path: Path, name: str, visuals, geoms) -> None:
     ET.ElementTree(root).write(path, encoding="unicode", xml_declaration=True)
 
 
-def _quat(T):
-    from scipy.spatial.transform import Rotation
-
-    x, y, z, w = Rotation.from_matrix(T[:3, :3]).as_quat()
-    return fmt((w, x, y, z))
-
 
 def _write_mjcf(path: Path, name: str, visuals, geoms) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,7 +196,7 @@ def _write_mjcf(path: Path, name: str, visuals, geoms) -> None:
     for i, g in enumerate(geoms):
         a = {"name": f"{name}_col{i}", "group": "3", "rgba": "0.2 0.6 1 0.3"}
         if g.kind == "box":
-            a.update(type="box", size=fmt(np.array(g.size) / 2), pos=fmt(g.transform[:3, 3]), quat=_quat(g.transform))
+            a.update(type="box", size=fmt(np.array(g.size) / 2), pos=fmt(g.transform[:3, 3]), quat=quat(g.transform))
         else:
             a.update(type="mesh", mesh=f"{name}_col{i}")
         ET.SubElement(wb, "geom", a)
@@ -226,7 +206,7 @@ def _write_mjcf(path: Path, name: str, visuals, geoms) -> None:
 
 def _write_maniskill(path: Path, name: str, visuals, geoms) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    boxes = [(np.round(g.transform[:3, 3], 6).tolist(), [float(x) for x in _quat(g.transform).split()],
+    boxes = [(np.round(g.transform[:3, 3], 6).tolist(), [float(x) for x in quat(g.transform).split()],
               np.round(np.array(g.size) / 2, 6).tolist()) for g in geoms if g.kind == "box"]
     meshes = [i for i, g in enumerate(geoms) if g.kind == "mesh"]
     fn = re.sub(r"\W", "_", name)

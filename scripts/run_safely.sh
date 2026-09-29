@@ -4,14 +4,16 @@
 #   scripts/run_safely.sh <command ...>
 #   CAD2URDF_RESERVE_GB=6 scripts/run_safely.sh <command>   # keep more RAM for other apps
 #
-# - Memory: joins the systemd user slice cad2urdf.slice. ONE cap (total RAM - 5 GB, no swap) covers all
+# - Memory: joins the systemd user slice cad2urdf.slice. ONE cap (half the RAM by default, no swap) covers all
 #   cad2urdf jobs together; past it only these jobs are killed (exit 137).
 # - OOM: oom_score_adj 1000, so the kernel kills these jobs before your editor/browser.
 # - CPU: nice 19, so idle cores are used but other apps win.
 set -euo pipefail
-reserve_gb=${CAD2URDF_RESERVE_GB:-${RESERVE_GB:-5}}
 total_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-cap_kb=$(( total_kb - reserve_gb * 1024 * 1024 ))
+# same default as cad2urdf/safety.py: leave half the RAM (at least 5 GB) to the desktop
+reserve_kb=$(( total_kb / 2 )); (( reserve_kb < 5 * 1024 * 1024 )) && reserve_kb=$(( 5 * 1024 * 1024 ))
+[ -n "${CAD2URDF_RESERVE_GB:-${RESERVE_GB:-}}" ] && reserve_kb=$(awk -v g="${CAD2URDF_RESERVE_GB:-$RESERVE_GB}" 'BEGIN{printf "%d", g*1024*1024}')
+cap_kb=$(( total_kb - reserve_kb ))
 (( cap_kb < 1024 * 1024 )) && cap_kb=$(( 1024 * 1024 ))
 inner=(sh -c 'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$@"' sh)
 if command -v systemd-run >/dev/null && systemd-run --user --scope --quiet --slice=cad2urdf.slice true 2>/dev/null \
