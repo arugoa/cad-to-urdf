@@ -1,12 +1,5 @@
-"""Simulator-specific side files that URDF cannot express.
-
-* Isaac Lab:   ArticulationCfg (UrdfFileCfg import options + actuator groups)
-* ManiSkill:   BaseAgent subclass (controllers, keyframes, materials)
-* Gazebo:      ros2_control controllers.yaml for gz_ros2_control
-
-These are emitted as text templates filled from the IR. They follow the APIs of
-Isaac Lab `main` and ManiSkill 3 as of Sep 2026 but could not be executed in
-this environment (no Isaac Sim / GPU); treat them as starting points.
+"""Simulator side files URDF can't express: Isaac Lab ArticulationCfg, ManiSkill agent class, Gazebo
+ros2_control controllers.
 """
 
 from __future__ import annotations

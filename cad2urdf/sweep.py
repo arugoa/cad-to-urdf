@@ -1,14 +1,6 @@
-"""Joint-limit sweep on the exact part geometry (build-time check).
-
-For every revolute/prismatic joint, move the child link to its lower and upper
-limit and measure the solid volume its parts share with the parent link's parts,
-compared with the start pose. A jump means the limit drives the child through
-material: a wrong sign, a wrong offset, or a stroke longer than the mechanism.
-
-Simulators cannot catch this, because parent/child contacts are filtered (the
-parts overlap at the joint by design), so the joint limits are the only thing
-stopping the motion. This uses the per-part solids the front ends produce
-(STEP B-rep tessellation, Onshape meshes). Parts that aren't closed are skipped.
+"""Joint-limit sweep: move each child link to its limits and measure how much solid volume it shares with
+its parent. A jump means the limit drives the part through material (wrong sign, offset or stroke);
+simulators can't catch this because parent/child contacts are filtered.
 """
 
 from __future__ import annotations

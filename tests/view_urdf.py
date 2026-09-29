@@ -4,6 +4,7 @@
     python tests/view_urdf.py build/arm4 --sim maniskill       # SAPIEN viewer window, PD-held at the home pose
     python tests/view_urdf.py build/arm4 --sim mujoco          # MuJoCo viewer (Control panel = joint targets)
     python tests/view_urdf.py build/arm4                       # browser: sliders, collision toggle, SRDF poses
+    python tests/view_urdf.py build/arm4 --sim isaac           # Isaac Sim window (needs setup_venv.sh --isaac, ~8 GB RAM)
 
     # a static scene dir (from `python -m cad2urdf.scene ...`)
     python tests/view_urdf.py build/field --sim maniskill
@@ -74,7 +75,7 @@ def view_mujoco(info: dict, screenshot: str | None) -> None:
         r = mujoco.Renderer(m, 720, 1280)
         cam = mujoco.MjvCamera()
         mujoco.mjv_defaultFreeCamera(m, cam)
-        # frame the model's own geoms (ignore the floor plane, which would dominate the extent)
+        # frame the model, not the floor
         idx = [i for i in range(m.ngeom) if m.geom_type[i] != mujoco.mjtGeom.mjGEOM_PLANE]
         pts = d.geom_xpos[idx]
         rad = m.geom_rbound[idx]
@@ -195,6 +196,35 @@ def _save(img: np.ndarray, path: str) -> None:
 
 
 # ------------------------------------------------------------------ browser (viser)
+def view_isaac(info: dict) -> None:
+    """Open the Isaac Sim window with the robot imported by Isaac's own URDF importer (as Isaac Lab does)."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    from cad2urdf.util import meminfo_gb
+    from cad2urdf.validate import isaac_python
+
+    avail, need = meminfo_gb("MemAvailable"), float(os.environ.get("CAD2URDF_ISAAC_MIN_FREE_GB", "10"))
+    if avail < need:  # a GUI Isaac Sim needs ~8-9 GB
+        raise SystemExit(f"Isaac Sim needs ~9 GB free and only {avail:.1f} GB is available. Close VS Code / the "
+                         "browser and run this from a plain terminal (or set CAD2URDF_ISAAC_MIN_FREE_GB to override).")
+    if info["urdf"] is None:
+        raise SystemExit(f"no .urdf in {info['dir']}")
+    py = isaac_python()
+    if py is None:
+        raise SystemExit("Isaac Sim isn't installed: scripts/setup_venv.sh --isaac")
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
+    icd = Path("/usr/share/vulkan/icd.d/nvidia_icd.json")
+    if icd.exists():
+        env.setdefault("VK_ICD_FILENAMES", str(icd))  # hybrid laptops: render on the NVIDIA GPU
+    probe = Path(__file__).resolve().parents[1] / "cad2urdf" / "isaac_probe.py"
+    print(f"Isaac Sim: {info['urdf']} (first start takes a few minutes)")
+    sys.exit(subprocess.run([str(py), str(probe), str(info["urdf"].resolve()), json.dumps({}), "--gui"], env=env).returncode)
+
+
 def view_browser(info: dict, port: int) -> None:
     import viser
     import yourdfpy
@@ -206,7 +236,14 @@ def view_browser(info: dict, port: int) -> None:
     robot = yourdfpy.URDF.load(str(urdf_path), build_scene_graph=True, load_meshes=True,
                                build_collision_scene_graph=True, load_collision_meshes=True)
     server = viser.ViserServer(port=port)
-    server.scene.add_grid("/grid", width=4, height=4, cell_size=0.1)
+    # grid and starting camera sized to the robot
+    lo, hi = robot.scene.bounds
+    center, size = (lo + hi) / 2, float(np.linalg.norm(hi - lo))
+    grid = max(round(3 * size, 1), 0.5)
+    server.scene.add_grid("/grid", width=grid, height=grid, cell_size=grid / 30, position=(center[0], center[1], lo[2]))
+    server.initial_camera.look_at = tuple(center)
+    server.initial_camera.position = tuple(center + np.array([1.0, -1.0, 0.7]) * size)
+    server.initial_camera.near = size / 100
     vu = ViserUrdf(server, robot, root_node_name="/robot", load_meshes=True, load_collision_meshes=True,
                    collision_mesh_color_override=(0.2, 0.6, 1.0, 0.45))
     vu.show_collision = False
@@ -257,7 +294,7 @@ def view_browser(info: dict, port: int) -> None:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("path", type=Path, help="output dir (robot or scene) or a .urdf file")
-    ap.add_argument("--sim", choices=["browser", "mujoco", "maniskill"], default="browser")
+    ap.add_argument("--sim", choices=["browser", "mujoco", "maniskill", "isaac"], default="browser")
     ap.add_argument("--scene", type=Path, help="(maniskill) static scene output dir to place the robot on")
     ap.add_argument("--at", type=float, nargs=3, default=None,
                     help="(maniskill) robot base position; default lifts the robot just above the floor")
@@ -267,6 +304,8 @@ def main():
     info = inspect_dir(args.path)
     if args.sim == "mujoco":
         view_mujoco(info, args.screenshot)
+    elif args.sim == "isaac":
+        view_isaac(info)
     elif args.sim == "maniskill":
         at = args.at
         if at is None:
@@ -289,5 +328,10 @@ def main():
 if __name__ == "__main__":
     from cad2urdf.safety import sandbox
 
+    import os
+    import sys
+
+    if "isaac" in sys.argv:  # Isaac Sim needs ~8 GB: a 10 GB cap instead of half the RAM
+        os.environ.setdefault("CAD2URDF_RESERVE_GB", "4")
     sandbox()  # re-launch this script inside the shared memory cap
     main()

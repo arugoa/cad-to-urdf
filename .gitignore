@@ -7,4 +7,3 @@ __pycache__/
 build/
 .env
 .venv-isaac/
-.venv-isaac6/

@@ -1,7 +1,6 @@
-"""cad2urdf CLI:  python -m cad2urdf SPEC.yaml -o OUTDIR [--study]
+"""cad2urdf compiler: python -m cad2urdf SPEC.yaml -o OUTDIR [--study]
 
-Pipeline: STEP + spec -> IR (links, joints, inertia) -> collision geometry ->
-URDF / SRDF / MJCF / Gazebo URDF / Isaac Lab cfg / ManiSkill agent -> report.
+spec -> IR -> simplified visuals -> collision -> URDF, SRDF, MJCF, Gazebo, Isaac Lab, ManiSkill -> report.
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import collision, mjcf, model, srdf, targets, urdf
+from . import collision, mjcf, model, simplify, srdf, targets, urdf
 
 
 def main(argv=None):
@@ -32,6 +31,13 @@ def main(argv=None):
     for c in robot.candidates:
         print("   candidate", c.summary())
 
+    cfg = robot.spec.get("simplify", {})
+    if cfg is not False:
+        rep = simplify.simplify_robot(robot, cfg.get("drop_fasteners", True), cfg.get("visual_faces_per_link", 20000))
+        before, after = sum(r["faces_before"] for r in rep.values()), sum(r["faces_after"] for r in rep.values())
+        print(f"   simplified visuals: {before:,} -> {after:,} triangles, "
+              f"{sum(r['dropped'] for r in rep.values())} fasteners dropped")
+
     print("2/6 collision geometry")
     collision.build_collisions(robot)
 
@@ -48,8 +54,7 @@ def main(argv=None):
     srdf.build_srdf(robot, disabled).write(out / f"{robot.name}.srdf", encoding="unicode", xml_declaration=True)
 
     print("5/6 MJCF + Isaac Lab / ManiSkill / Gazebo side files")
-    # MuJoCo filters parent/child contacts *except* when the parent is welded to the world
-    # (a fixed base), so Adjacent pairs are excluded explicitly, plus pairs that touch by design.
+    # MuJoCo doesn't filter parent/child contacts when the parent is welded to the world
     excludes = [p for p, r in disabled.items() if r in ("Adjacent", "Default", "Always")]
     keyframes = {}
     for name, st in s.get("group_states", {}).items():

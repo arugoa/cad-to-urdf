@@ -2,37 +2,17 @@
 
 from __future__ import annotations
 
-import warnings
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import numpy as np
-from scipy.spatial.transform import Rotation
 
 from .model import Robot
+from .util import fmt, rpy
 
 
-def fmt(v, digits=6) -> str:
-    return " ".join(f"{x:.{digits}g}" if abs(x) > 1e-12 else "0" for x in np.ravel(v))
 
 
-def rpy_of(R: np.ndarray) -> np.ndarray:
-    T = np.eye(4)
-    T[:3, :3] = R
-    return rpy(T)
-
-
-def rpy(T: np.ndarray) -> np.ndarray:
-    """URDF fixed-axis roll/pitch/yaw. At gimbal lock scipy still returns a valid
-    decomposition (it just zeroes one angle), so its warning is safe to silence."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        return Rotation.from_matrix(T[:3, :3]).as_euler("xyz")
-
-
-# MuJoCo's STL decoder rejects files with more than 200,000 triangles (hard limit, found on a real Onshape
-# export); heavy visuals also slow every simulator. Decimate anything above this budget.
-MAX_VISUAL_FACES = 100_000
+MAX_VISUAL_FACES = 100_000  # per STL file; MuJoCo rejects files over 200k triangles
 
 
 def budget_mesh(mesh, max_faces: int = MAX_VISUAL_FACES):
@@ -47,12 +27,8 @@ def budget_mesh(mesh, max_faces: int = MAX_VISUAL_FACES):
 
 
 def split_heavy_visuals(robot: Robot, max_faces: int = MAX_VISUAL_FACES) -> None:
-    """Split any visual mesh over ``max_faces`` into several files, packing whole parts together.
-
-    Decimation can't shrink a link fused from ~1,000 small parts (quadric decimation stalls at ~1M
-    triangles on the Infantry chassis), and MuJoCo rejects any STL over 200,000 triangles. Several meshes
-    per body load fine everywhere. A single part that is itself over budget is decimated alone.
-    """
+    """Split visual meshes over ``max_faces`` into several files by connected parts (decimation stalls on
+    links fused from many parts); a single part over budget is decimated."""
     import trimesh
 
     for link in robot.links.values():
@@ -135,7 +111,7 @@ def build_urdf(robot: Robot, mesh_prefix: str = "meshes", flavour: str = "neutra
     for j in robot.joints.values():
         el = ET.SubElement(root, "joint", name=j.name, type=j.type)
         xyz, R = robot.child_in_parent(j)
-        _origin(el, xyz, rpy_of(R))
+        _origin(el, xyz, rpy(R))
         ET.SubElement(el, "parent", link=j.parent)
         ET.SubElement(el, "child", link=j.child)
         if j.type == "fixed":

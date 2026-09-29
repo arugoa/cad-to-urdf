@@ -1,26 +1,12 @@
-"""Front end #2: an exporter's URDF (Onshape's URDF export, onshape-to-robot,
-sw2robot / sw_urdf_exporter, ACDC4Robot / fusion2urdf, creo2urdf, ...) -> IR.
+"""URDF front end: an exporter's URDF (Onshape export, onshape-to-robot, sw2robot, ACDC4Robot, creo2urdf).
 
-The exporter has already done the part of the job it is good at: reading the
-CAD mates, frames, limits and mass properties. This module keeps all of that and
-hands the robot to the same collision / SRDF / per-simulator stages as the STEP
-front end. Each <visual> element becomes one "part", so collision modes that work
-per part (``primitives``) still see the exporter's part split when it kept one
-(onshape-to-robot does unless ``merge_stls`` is on).
-
-Spec keys (all optional except ``source``):
-
-    source: path/to/robot.urdf
-    package_dirs: {pkg_name: path}      # resolve package://pkg_name/...
-    base: fixed | floating
-    root_rpy: [r, p, y]                 # re-orient a Y-up export (SolidWorks) to Z-up
-    joints: {name: {limits: [lo, hi], effort: .., velocity: .., mimic: {...}}}   # overrides
-    dynamics / actuators / contact / collision / srdf    # as for the STEP front end
+Keeps the exporter's frames, joints, limits and inertia; each <visual> becomes one part for the per-part
+collision modes. Spec keys: ``source``, ``package_dirs: {pkg: path}``, ``base: fixed|floating``,
+``root_rpy``, and the usual joints / dynamics / actuators / collision / srdf overrides.
 """
 
 from __future__ import annotations
 
-import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -29,6 +15,7 @@ import trimesh
 from scipy.spatial.transform import Rotation
 
 from . import cad
+from .util import slug
 from .model import CollisionGeom, Joint, Link, Robot, _per, check_inertia
 
 
@@ -95,9 +82,6 @@ def _geometry(geo: ET.Element, resolve: _Resolver) -> tuple[str, tuple, trimesh.
     raise ValueError(f"unsupported geometry <{child.tag}>")
 
 
-def _key(name: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_") or "v"
-
 
 def build_from_urdf(spec: dict, base: Path) -> Robot:
     urdf_path = (base / spec["source"]).resolve()
@@ -153,7 +137,7 @@ def build_from_urdf(spec: dict, base: Path) -> Robot:
         for i, v in enumerate(lel.findall("visual")):
             kind, size, m = _geometry(v.find("geometry"), resolve)
             m.apply_transform(_pose(v.find("origin")))
-            key = f"{i}_{_key(v.get('name', ''))}" if v.get("name") else f"{i}"
+            key = f"{i}_{slug(v.get('name', ''))}" if v.get("name") else f"{i}"
             link.visuals[key] = m
             mat = v.find("material")
             rgba = None
@@ -161,7 +145,7 @@ def build_from_urdf(spec: dict, base: Path) -> Robot:
             if mat is not None:
                 c = mat.find("color")
                 rgba = c.get("rgba") if c is not None else named_colors.get(mat.get("name"))
-                mat_name = _key(mat.get("name") or mat_name)
+                mat_name = slug(mat.get("name") or mat_name)
             robot_materials.setdefault(mat_name, rgba or "0.7 0.7 0.7 1")
             link.visual_materials[key] = mat_name
             world_mesh = m.copy()

@@ -1,16 +1,12 @@
-"""cad2sim router CLI: pick the route from (CAD, format, simulator) and run it.
+"""Router CLI: pick the route for (CAD, format, simulator), print it, and optionally run it.
 
     python -m cad2urdf.route --list
-    python -m cad2urdf.route --cad onshape --format native --sim maniskill                 # plan only
-    python -m cad2urdf.route --cad onshape --format step --sim maniskill --run \\
-        --input robot.step --out build/robot [--spec overrides.yaml]
-    python -m cad2urdf.route --cad solidworks --format native --sim mujoco --run --input robot.urdf --out build/r
-    python -m cad2urdf.route --cad onshape --format native --sim isaaclab --run \\
-        --input "https://cad.onshape.com/documents/..." --out build/r      # needs ONSHAPE_* keys (our own API client)
+    python -m cad2urdf.route --cad onshape --format native --sim maniskill        # plan only
+    python -m cad2urdf.route --cad solidworks --format step --sim mujoco --run --input robot.step --out build/r
+    python -m cad2urdf.route --cad onshape --format native --sim isaaclab --run --input <assembly URL> --out build/r
 
-Everything here is deterministic. The only judgment calls (joint limits,
-materials, mimic couplings for STEP input) are written as REVIEW lines in the
-draft spec; pass corrections with --spec.
+For STEP input the guesses (limits, materials, couplings) are REVIEW lines in the draft spec; pass
+corrections with --spec.
 """
 
 from __future__ import annotations

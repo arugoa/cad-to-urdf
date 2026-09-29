@@ -1,53 +1,32 @@
-# Onshape API keys (for the `onshape / native` route)
+# Onshape API keys
 
-The router reads your real Onshape mates through the Onshape REST API, using cad2urdf's own client (`cad2urdf/onshape.py`). That needs an API key pair.
+The `onshape / native` route reads your assembly through the Onshape REST API and needs an API key pair. Keys are managed in your Onshape settings:
 
-API keys are managed in your Onshape **settings** (the old "Developer portal" link no longer shows them). Where depends on your account type:
+- Personal, free or education account: user icon (top right), My account, Developer, API keys, Create new API key. Read permissions are enough.
+- Company or Enterprise account (e.g. `yourteam.onshape.com`): only an admin can create keys that read Enterprise documents. The admin goes to user icon, Enterprise settings, Developer, API keys, creates a read-only key assigned to you, and sends you both values. A personal key gets a 403 on Enterprise documents.
 
-1. **Personal / free / education account:** user icon (top right) → **My account** → **Developer** → **API keys** → **Create new API key**. Tick read permissions only.
-2. **Company or Enterprise account** (e.g. `tritonrobotics.onshape.com`): **only an admin can create keys** for Enterprise documents. Ask an admin to do:
-   - user icon → **Company/Enterprise settings** → **Developer** → **API keys** tab → **Create new API key**;
-   - assign the key to you, with read permissions;
-   - send you both values privately.
+The secret key is shown only once. Onshape's help pages: [My Account – Developer](https://cad.onshape.com/help/Content/Plans/my_account_developer.htm), [Enterprise Settings – Developer](https://cad.onshape.com/help/Content/Plans/enterprise_settings_developer.htm).
 
-   The *My account → Developer* page only manages keys not tied to the company; those may not be able to read Enterprise documents.
-3. Copy the **access key** and the **secret key**. The secret is shown only once.
-
-   Sources: [My Account – Developer](https://cad.onshape.com/help/Content/Plans/my_account_developer.htm), [Company/Classroom/Enterprise Settings – Developer](https://cad.onshape.com/help/Content/Plans/enterprise_settings_developer.htm).
-
-**No admin available?** Use Onshape's URDF export instead (no keys needed; see the end of this page).
-
-4. Copy the template and fill in the two values. `.env` is git-ignored, and cad2urdf reads it automatically:
-
-   ```bash
-   cp .env.example .env
-   ```
-   ```
-   ONSHAPE_ACCESS_KEY=<access key>
-   ONSHAPE_SECRET_KEY=<secret key>
-   ```
-
-   Exported shell variables also work and take precedence. Never commit keys or paste them into chat.
-
-5. Run the route with the assembly's URL (the `.../e/<element id>` part must be the **assembly** tab):
-
-   ```bash
-   python -m cad2urdf.route --cad onshape --format native --sim maniskill --run \
-       --input "https://tritonrobotics.onshape.com/documents/<doc>/w/<workspace>/e/<assembly>" --out build/hero
-   ```
-
-## What your assembly needs for this route
-
-Nothing special. Every mate is read as it is:
-- fastened mates and rigid sub-assemblies merge into one link;
-- revolute and slider mates become joints;
-- gear-type relations become mimic joints;
-- mate limits become joint limits.
-
-The instance marked *Fixed* (or the heaviest group) is the base. Assign materials in Onshape so the masses are real; parts without a material get `default_density` from the spec.
-
-Without keys, you can use Onshape's built-in URDF export instead: right-click the assembly tab → **Export** → **URDF**, then:
+Put the keys in `.env` at the repo root (git-ignored, read automatically; exported shell variables take precedence):
 
 ```bash
-python -m cad2urdf.route --cad onshape --format urdf-export --sim maniskill --run --input <unzipped>/robot.urdf --out build/hero
+cp .env.example .env
+# then set
+ONSHAPE_ACCESS_KEY=<access key>
+ONSHAPE_SECRET_KEY=<secret key>
+```
+
+Run the router with the URL of the assembly tab (the `/e/<id>` part must be the assembly):
+
+```bash
+python -m cad2urdf.route --cad onshape --format native --sim maniskill --run \
+    --input "https://cad.onshape.com/documents/<doc>/w/<workspace>/e/<assembly>" --out build/robot
+```
+
+Every mate is read as it is, with no naming convention required. The instance marked Fixed (or the heaviest group) is the base. Assign materials in Onshape so the masses are real; parts without one get `default_density` from the spec.
+
+No keys? Use Onshape's URDF export instead: right-click the assembly tab, Export, URDF, then
+
+```bash
+python -m cad2urdf.route --cad onshape --format urdf-export --sim maniskill --run --input <unzipped>/robot.urdf --out build/robot
 ```

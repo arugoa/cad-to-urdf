@@ -1,31 +1,17 @@
-"""Front end #3: a live Onshape assembly, read directly through the Onshape REST API.
+"""Onshape front end: reads a live assembly's mates through the REST API.
 
-Reads the assembly's own mates. No naming convention is required:
+    FASTENED / rigid sub-assembly -> same link      REVOLUTE -> revolute (continuous without limits)
+    SLIDER -> prismatic                              CYLINDRICAL / PIN_SLOT -> revolute (REVIEW)
+    gear / rack / screw relations -> mimic           BALL / PLANAR / ... -> ignored (REVIEW)
 
-* FASTENED mates and parts of one rigid sub-assembly  -> same link
-* REVOLUTE                                            -> revolute (or continuous if the mate has no limits)
-* SLIDER                                              -> prismatic
-* CYLINDRICAL / PIN_SLOT                              -> revolute, flagged REVIEW (they also slide)
-* BALL / PLANAR / PARALLEL / ...                      -> ignored, flagged REVIEW
-* GEAR / RACK_AND_PINION / SCREW / LINEAR relations   -> mimic on the follower joint
-* mate limits (limitsEnabled, limit*Min/Max)          -> joint limits
+Naming conventions (as in onshape-to-robot): if any mate is named ``dof_*``, only those are joints and
+``_inv`` flips the axis; ``closing_*`` mates close loops; joints named ``*passive*`` get no actuator and
+``*_speed`` a velocity one; ``frame_*`` markers are skipped.
 
-Mass properties come from Onshape (the materials you assigned); meshes are
-fetched per part as binary STL in metres. Every response is cached on disk
-(``~/.cache/cad2urdf/onshape``) so re-runs are offline and repeatable.
-
-Auth: API keys (Onshape settings -> Developer -> API keys; see docs/ONSHAPE_API_KEYS.md), exported as
-ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY (HTTP Basic auth). ONSHAPE_API
-defaults to the document URL's domain, so Enterprise domains work.
-
-Spec keys used here (all optional besides ``source``):
-
-    source: https://<domain>/documents/<did>/w/<wid>/e/<eid>
-    subassemblies: flexible | rigid   # flexible (default, Onshape's behaviour): sub-assembly mates cascade up
-    rigid_subassemblies: [regex, ...] # sub-assembly instance names to treat as one rigid body ("Make rigid"
-                                      # in Onshape is not exposed by the API)
-    default_density: 1200             # for parts without an Onshape material (kg/m^3)
-    joints / dynamics / actuators / collision / srdf    # as elsewhere
+Masses come from Onshape's materials, meshes are per-part STL; responses are cached in
+``~/.cache/cad2urdf/onshape``. Keys: ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY (see docs/ONSHAPE_API_KEYS.md).
+Spec keys: ``source`` (assembly URL), ``subassemblies: flexible|rigid``, ``rigid_subassemblies: [regex]``,
+``default_density``.
 """
 
 from __future__ import annotations
@@ -45,6 +31,7 @@ import trimesh
 
 from . import cad
 from .model import Joint, Link, Robot, _per, check_inertia, combine_inertia
+from .util import UnionFind, slug
 
 URL_RE = re.compile(r"/documents/(?P<did>[0-9a-f]{24})/(?P<wvm>[wvm])/(?P<wvmid>[0-9a-f]{24})/e/(?P<eid>[0-9a-f]{24})")
 UNIT = {"m": 1.0, "meter": 1.0, "mm": 1e-3, "millimeter": 1e-3, "cm": 1e-2, "centimeter": 1e-2, "in": 0.0254,
@@ -161,8 +148,7 @@ def _limits(client: Client, ref: dict, mates: dict[str, Mate]) -> None:
             params[pm.get("parameterId")] = pm.get("expression", pm.get("value"))
         if str(params.get("limitsEnabled")).lower() != "true":
             continue
-        # sliders store translation limits in limitZ*, revolute/cylindrical rotation limits in limitAxialZ*
-        # (seen on the live API; both families are always present, only the matching one is meaningful)
+        # sliders use limitZ*, rotations limitAxialZ* (both are always present)
         pre = "limitZ" if mates[fid].type == "SLIDER" else "limitAxialZ"
         lo, hi = parse_quantity(params.get(pre + "Min")), parse_quantity(params.get(pre + "Max"))
         if lo is not None and hi is not None:
@@ -185,11 +171,10 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
     root = asm["rootAssembly"]
     subs = {(s["documentId"], s["elementId"], s.get("configuration", "")): s for s in asm.get("subAssemblies", [])}
     occ_T = {tuple(o["path"]): np.array(o["transform"], float).reshape(4, 4) for o in root["occurrences"]}
-    # linked-document parts must be fetched through the linked *version*; parts[] carries it
+    # parts from linked documents must be fetched at the linked version
     versions = {(q["documentId"], q["elementId"], q["partId"]): q.get("documentVersion")
                 for q in asm.get("parts", []) if q.get("documentVersion")}
-    # keep solid and composite parts (a composite groups several bodies into one real part);
-    # skip sheets/wires, and parts that are only reference-frame markers (mated via "frame_*" mates)
+    # keep solid and composite parts; skip sheets, wires and frame_* marker parts
     body_type = {(q["documentId"], q["elementId"], q["partId"]): q.get("bodyType", "solid")
                  for q in asm.get("parts", [])}
     in_frame, in_other = set(), set()
@@ -202,7 +187,7 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
             (in_frame if f["featureData"].get("name", "").lower().startswith("frame_") else in_other).update(ids)
     frame_ids = in_frame - in_other  # parts attached ONLY through frame_* mates are markers
     occ_fixed = {tuple(o["path"]) for o in root["occurrences"] if o.get("fixed")}
-    # "dof_" naming convention: top-level instances are the links, sub-assemblies are rigid units
+    # dof_ convention: top-level instances are links, sub-assemblies are rigid
     uses_dof = any(f["featureType"] == "mate" and f["featureData"].get("name", "").lower().startswith("dof_")
                    for d in [root, *asm.get("subAssemblies", [])] for f in d["features"])
     if uses_dof:
@@ -219,8 +204,7 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
             path = prefix + (inst["id"],)
             if inst["type"] == "Assembly":
                 sub = subs[(inst["documentId"], inst["elementId"], inst.get("configuration", ""))]
-                # Onshape sub-assemblies are flexible by default (their mates' DOF cascade up to the parent).
-                # The API does not expose "Make rigid", so rigid ones are named in the spec.
+                # sub-assemblies are flexible by default; the API doesn't expose "Make rigid"
                 named_rigid = any(re.search(p, inst["name"], re.I) for p in rigid_patterns)
                 walk(sub, path, rigid if rigid else (path if (named_rigid or not flexible) else None))
             elif inst["type"] == "Part":
@@ -245,7 +229,7 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
                 relations.append({**d, "prefix": prefix})
             elif f["featureType"] == "mateGroup":
                 groups.append([prefix + tuple(o["occurrence"]) for o in d.get("occurrences", [])])
-        # Instance patterns: copies are placed rigidly relative to their seed and carry no mates of their own
+        # pattern copies are rigid with their seed
         for pat in defn.get("patterns", []):
             if pat.get("suppressed"):
                 continue
@@ -271,13 +255,10 @@ def _mesh_and_mass(client: Client, occ: Occ, density: float, top_did: str | None
     base = f"/api/v10/parts/d/{p['documentId']}/{wvm}/{wvmid}/e/{p['elementId']}/partid/{quote(p['partId'], safe='')}"
     cfg = {"configuration": p.get("configuration", "")}
     if linked:
-        # part lives in a linked document (library / purchased part): Onshape grants access only
-        # through the document that links to it
         cfg["linkDocumentId"] = top_did
     stl = client.get(base + "/stl", {**cfg, "mode": "binary", "units": "meter", "grouping": "true"}, binary=True)
     mesh = trimesh.load(io.BytesIO(stl), file_type="stl", force="mesh")
-    # Onshape's STL does not share vertices between triangles: weld coincident vertices (1 um) so parts
-    # come out as closed solids (needed for volumes, containment and exact-geometry checks)
+    # Onshape's STL doesn't share vertices: weld them so parts are closed solids
     mesh.merge_vertices(digits_vertex=6)
     mesh.remove_unreferenced_vertices()
     mesh.apply_transform(occ.T)
@@ -297,23 +278,51 @@ def _mesh_and_mass(client: Client, occ: Occ, density: float, top_did: str | None
     return mesh, float(m.mass), np.array(m.center_mass), np.array(m.moment_inertia), float(m.volume)
 
 
-class _UF:
-    def __init__(self):
-        self.p = {}
-
-    def find(self, x):
-        self.p.setdefault(x, x)
-        while self.p[x] != x:
-            self.p[x] = self.p[self.p[x]]
-            x = self.p[x]
-        return x
-
-    def union(self, a, b):
-        self.p[self.find(a)] = self.find(b)
 
 
-def _key(s: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_]+", "_", s).strip("_").lower() or "x"
+def _named_actuator(jname: str, spec: dict) -> dict:
+    """The spec's actuator; unless the spec names the joint, ``*passive*`` -> none, ``*_speed`` -> velocity."""
+    acts = spec.get("actuators", {}) or {}
+    a = dict(_per(acts, jname))
+    if jname in acts:
+        return a
+    if "passive" in jname.lower():
+        return {"kind": "none"}
+    if jname.lower().endswith("_speed"):
+        return {"kind": "velocity", "kv": a.get("kv", 1.0)}
+    return a
+
+
+def _add_closures(robot: Robot, closing: list, gname: dict, group_of, occ_T: dict, explicit_act: set,
+                  review: list) -> None:
+    """``closing_*`` mates become point constraints at the mate origin. Loop joints not on the base get no
+    actuator (in a parallel mechanism the motors are at the base; servos elsewhere would fight the loop)."""
+    tree_parent = {j.child: j for j in robot.joints.values()}
+
+    def path_to_root(link):
+        out = []
+        while link in tree_parent:
+            out.append(tree_parent[link])
+            link = tree_parent[link].parent
+        return out
+
+    for m in closing:
+        ga, gb = group_of(m.occ[0]), group_of(m.occ[1])
+        la, lb = gname.get(ga), gname.get(gb)
+        if la is None or lb is None or la == lb:
+            review.append(f"mate {m.name}: closing mate between parts of one link (or off the tree); ignored")
+            continue
+        world = (occ_T[m.occ[0]] @ m.cs[0])[:3, 3]
+        anchors = [np.linalg.inv(robot.links[n].pose()) @ np.r_[world, 1.0] for n in (la, lb)]
+        robot.closures.append({"name": slug(m.name, lower=True), "link1": la, "link2": lb,
+                               "anchor1": anchors[0][:3], "anchor2": anchors[1][:3]})
+        pa, pb = path_to_root(la), path_to_root(lb)
+        loop = {j.name for j in pa} ^ {j.name for j in pb}
+        passive = sorted(n for n in loop if robot.joints[n].parent != robot.root and n not in explicit_act)
+        for n in passive:
+            robot.joints[n].actuator = {"kind": "none"}
+        review.append(f"mate {m.name}: loop closure {la} <-> {lb} (MJCF equality; URDF-only simulators need a "
+                      f"constraint added by hand); passive loop joints: {passive}")
 
 
 def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> Robot:
@@ -333,8 +342,7 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             raise ValueError(f"mate references unknown occurrence {path}")
         return ls[0]
 
-    # mates to instances the API didn't return (non-solid markers such as "frame_*" parts, sketches,
-    # mate-connector-only instances) are not physical joints: skip and report them
+    # mates to instances the API didn't return (markers, sketches) aren't joints
     kept = []
     for m in mates:
         if len(m.occ) < 2:
@@ -345,9 +353,6 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             review.append(f"mate {m.name}: references a non-solid or missing instance; ignored")
     mates = kept
 
-    # Naming convention: if the designer marked joints with a "dof_" prefix (as many robot CAD
-    # workflows do), only those mates are joints; other revolute/slider mates just align screws,
-    # standoffs etc. and are treated as fixed. A "_inv" suffix flips the axis.
     use_dof = any(m.name.lower().startswith("dof_") for m in mates)
     if use_dof:
         n_other = sum(1 for m in mates if not m.name.lower().startswith("dof_")
@@ -355,7 +360,7 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
         review.append(f"'dof_' naming found: top-level instances are links (sub-assemblies rigid), only dof_* "
                       f"mates are joints, fastened mates join, other mates ignored ({n_other} revolute/slider-type)")
 
-    uf = _UF()
+    uf = UnionFind()
     for p, o in occs.items():
         uf.find(p)
         if o.rigid_group:
@@ -364,13 +369,15 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
         leaves = [rep(p) for p in grp if leaves_under(p)]
         for a in leaves[1:]:
             uf.union(leaves[0], a)
-    moving = []
+    moving, closing = [], []
     for m in mates:
         a, b = rep(m.occ[0]), rep(m.occ[1])
+        if m.name.lower().startswith("closing_") and m.type in ("REVOLUTE", "SLIDER", "CYLINDRICAL", "PIN_SLOT",
+                                                                  "BALL", "FASTENED"):
+            closing.append(m)
+            continue
         if use_dof and not m.name.lower().startswith("dof_"):
-            # the designer declared the moving mates: fastened ones still join parts, every other mate
-            # (parallel/planar alignment, a revolute used to seat a screw, ...) is ignored; anything left
-            # unconnected is attached to the base below
+            # dof_ mode: fastened mates still join, other mates only align parts
             if m.type == "FASTENED":
                 uf.union(a, b)
             continue
@@ -426,7 +433,7 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
 
     def link_name(ps):
         big = max(ps, key=lambda p: part_data[p][1])
-        n = _key(occs[big].name)
+        n = slug(occs[big].name, lower=True)
         k, out = 2, n
         while out in taken:
             out, k = f"{n}_{k}", k + 1
@@ -447,7 +454,7 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
         link = Link(name)
         for p in groups[g]:
             mesh, mass, com, I, vol = part_data[p]
-            part = cad.Part(name=f"{name}/{_key(occs[p].name)}", shape=None, link=name, mesh=mesh,
+            part = cad.Part(name=f"{name}/{slug(occs[p].name, lower=True)}", shape=None, link=name, mesh=mesh,
                             mass=mass, com=com, inertia=I, volume=vol)
             link.parts.append(part)
         if g in parent_of:
@@ -457,16 +464,12 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             axis_w = F[0][:3, 2]
             raw = m.name[4:] if m.name.lower().startswith("dof_") else m.name
             flip = raw.lower().endswith("_inv")
-            jname = _key(raw[:-4] if flip else raw)
+            jname = slug(raw[:-4] if flip else raw, lower=True)
             while jname in joints:
                 jname += "_"
             jtype = "prismatic" if m.type == "SLIDER" else "revolute"
-            # Onshape's mate value is the motion of entity 0 relative to entity 1 along/about the mate Z
-            # axis, from the mate's own zero. (Established on a real pneumatic cylinder: SLIDER limits
-            # [-4.5 in, 0] with the piston as entity 0 and mate Z pointing down only fit the geometry if
-            # the piston moves UP into the barrel.) Our joint zero is the assembly's current pose and the
-            # joint moves the child along +axis_w, so shift by the current value and flip the sign when
-            # the child is entity 1.
+            # Onshape limits are entity 0's motion relative to entity 1 from the mate's zero; our zero is the
+            # current pose and the child moves along +axis_w: shift by the current value, flip if child is 1
             if jtype == "prismatic":
                 q_now = float(np.dot(F[0][:3, 3] - F[1][:3, 3], axis_w))
             else:
@@ -495,7 +498,7 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
                 damping=_per(spec.get("dynamics", {}), jname).get("damping", 0.0),
                 friction=_per(spec.get("dynamics", {}), jname).get("friction", 0.0),
                 armature=_per(spec.get("dynamics", {}), jname).get("armature", 0.0),
-                mimic=ov.get("mimic"), actuator=_per(spec.get("actuators", {}), jname))
+                mimic=ov.get("mimic"), actuator=_named_actuator(jname, spec))
             joint_of_mate[m.feature_id] = jname
             link.origin = Tj[:3, 3].copy()
         links[name] = link
@@ -519,6 +522,8 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
 
     robot = Robot(spec.get("robot", "onshape_robot"), spec, links, joints, [], gname[root],
                   floating_base=spec.get("base", "fixed") == "floating")
+    _add_closures(robot, closing, {g: gname[g] for g in order}, lambda o: uf.find(rep(o)), occ_T,
+                  set((spec.get("actuators") or {}).keys()), review)
     robot.materials["onshape_grey"] = "0.72 0.74 0.78 1"
     robot.review = review  # type: ignore[attr-defined]
     for r in review:

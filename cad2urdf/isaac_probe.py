@@ -1,11 +1,9 @@
-"""Isaac Sim check, run with the Isaac Sim Python (.venv-isaac6 / .venv-isaac), not the main venv.
+"""Import a URDF with Isaac Sim's URDF importer (as Isaac Lab does), drive it and report.
 
-    .venv-isaac6/bin/python cad2urdf/isaac_probe.py ROBOT.urdf '{"joint": target, ...}' [--floating]
+    .venv/bin/python cad2urdf/isaac_probe.py ROBOT.urdf '{"joint": target, ...}' [--floating] [--gui]
 
-Imports the URDF with Isaac Sim's own URDF importer (the one Isaac Lab's UrdfFileCfg uses), steps PhysX
-with position drives towards the targets, and prints one ``ISAAC_RESULT {json}`` line.
-Supports Isaac Sim 6.x (URDFImporter + isaacsim.core.experimental) and 5.x (commands + isaacsim.core.api).
-Kept free of cad2urdf imports so it runs inside Isaac's environment.
+Prints one ``ISAAC_RESULT {json}`` line; ``--gui`` keeps the window open instead. Supports Isaac Sim 6.x
+and 5.x. No cad2urdf imports, so it runs in any Python that has Isaac Sim.
 """
 
 import json
@@ -15,8 +13,9 @@ import sys
 import numpy as np
 from isaacsim import SimulationApp
 
-# multi_gpu off: on hybrid laptops (AMD iGPU + NVIDIA) the RTX renderer can crash probing both GPUs
-app = SimulationApp({"headless": True, "multi_gpu": False, "active_gpu": 0, "physics_gpu": 0})
+# multi_gpu off: the RTX renderer can crash probing both GPUs of a hybrid laptop
+GUI = "--gui" in sys.argv
+app = SimulationApp({"headless": not GUI, "multi_gpu": False, "active_gpu": 0, "physics_gpu": 0})
 
 import omni.kit.commands  # noqa: E402
 from isaacsim.core.utils.extensions import enable_extension  # noqa: E402
@@ -60,6 +59,10 @@ def run_isaac6():
     plane.CreateAxisAttr("Z")
     UsdPhysics.CollisionAPI.Apply(plane.GetPrim())
     stage_utils.add_reference_to_stage(usd, "/World/robot")
+    # Isaac Sim 6.x puts physics in a "Physics" variant set with no default selection
+    vsets = stage.GetPrimAtPath("/World/robot").GetVariantSets()
+    if vsets.HasVariantSet("Physics"):
+        vsets.GetVariantSet("Physics").SetVariantSelection("physx")
     roots = [str(p.GetPath()) for p in stage.Traverse() if p.HasAPI(UsdPhysics.ArticulationRootAPI)]
     if not roots:
         raise RuntimeError("no articulation root in the imported USD")
@@ -70,6 +73,11 @@ def run_isaac6():
     names = list(art.dof_names)
     q_target = np.array([[targets.get(n, 0.0) for n in names]], dtype=np.float32)
     art.set_dof_position_targets(q_target)
+    if GUI:  # physics steps with the timeline until the window closes
+        print(f"Isaac Sim: {len(names)} joints {names}; close the window to exit", flush=True)
+        while app.is_running():
+            app.update()
+        return names, q_target[0], _np(art.get_dof_positions())
     for _ in range(STEPS):
         SimulationManager.step()
         app.update()

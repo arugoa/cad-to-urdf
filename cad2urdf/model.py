@@ -1,10 +1,5 @@
-"""Neutral intermediate representation (IR) built from CAD + spec.
-
-Every exporter (URDF, SRDF, MJCF, Gazebo, Isaac Lab, ManiSkill) reads this IR;
-none of them re-reads the CAD. Frames follow the URDF convention: each link
-frame sits at its parent joint's origin. Its orientation in the world at the
-zero configuration is ``Link.rotation``: identity for the STEP front end,
-whatever the exporter chose for URDF inputs (see ``ingest.py``).
+"""Intermediate representation built from CAD + spec; every writer reads it, none re-reads the CAD.
+Each link frame sits at its parent joint's origin (URDF convention).
 """
 
 from __future__ import annotations
@@ -102,12 +97,11 @@ class Robot:
     root: str
     materials: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_RGBA))  # name -> "r g b a"
     floating_base: bool = False
+    # loop closures: {name, link1, link2, anchor1, anchor2} (anchors in link frames)
+    closures: list[dict] = field(default_factory=list)
 
     def rotate(self, R: np.ndarray) -> None:
-        """Re-orient the whole robot in the world (e.g. a Y-up CAD export -> Z-up simulators).
-
-        Link-frame data (visuals, collisions, COM, inertia) are unchanged; world-frame data rotate.
-        """
+        """Re-orient the robot (e.g. a Y-up export for Z-up simulators)."""
         T = np.eye(4)
         T[:3, :3] = R
         for link in self.links.values():
@@ -122,6 +116,29 @@ class Robot:
         for j in self.joints.values():
             j.origin = R @ j.origin
             j.axis = R @ j.axis
+        # URDF can't store the root link's orientation: bake it into the root's own geometry instead
+        root = self.links[self.root]
+        Rr = root.rotation
+        if not np.allclose(Rr, np.eye(3)):
+            Tr = np.eye(4)
+            Tr[:3, :3] = Rr
+            for k, m in root.visuals.items():
+                m = m.copy()
+                m.apply_transform(Tr)
+                root.visuals[k] = m
+            for g in [*root.collisions, *root.source_collisions]:
+                if g.kind == "mesh" and g.mesh is not None:  # vertices are already in the link frame
+                    g.mesh = g.mesh.copy()
+                    g.mesh.apply_transform(Tr)
+                else:
+                    g.transform = Tr @ g.transform
+            for c in self.closures:
+                for k in (1, 2):
+                    if c[f"link{k}"] == self.root:
+                        c[f"anchor{k}"] = Rr @ c[f"anchor{k}"]
+            root.com = Rr @ root.com
+            root.inertia = Rr @ root.inertia @ Rr.T
+            root.rotation = np.eye(3)
 
     def used_materials(self) -> dict[str, str]:
         """Every material a visual references, with a colour (neutral grey for ones not in ``materials``,
@@ -290,6 +307,11 @@ def build(spec_path: Path) -> Robot:
 
     robot = Robot(spec["robot"], spec, links, joints, candidates, roots[0],
                   floating_base=spec.get("base", "fixed") == "floating")
+    for cname, c in (spec.get("closures") or {}).items():
+        world = np.r_[np.array(c["point"], float) * scale, 1.0]
+        robot.closures.append({"name": cname, "link1": c["link1"], "link2": c["link2"],
+                               "anchor1": (np.linalg.inv(links[c["link1"]].pose()) @ world)[:3],
+                               "anchor2": (np.linalg.inv(links[c["link2"]].pose()) @ world)[:3]})
     if spec.get("root_rpy"):  # e.g. [1.5708, 0, 0] for a Y-up export
         from scipy.spatial.transform import Rotation
 
