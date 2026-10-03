@@ -93,12 +93,14 @@ def main(argv=None):
     for r in review:
         print(f"  REVIEW {r}")
 
-    from .__main__ import main as compile_main
-
-    compile_main([str(spec_path), "-o", str(args.out), "--samples", str(args.samples)])
+    # a separate process, so the compiler's memory (gigabytes on a big robot) is freed before validation starts
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    done = subprocess.run([sys.executable, "-m", "cad2urdf", str(spec_path), "-o", str(args.out),
+                           "--samples", str(args.samples)], env=env)
+    if done.returncode:
+        sys.exit(done.returncode)
     if not args.no_validate:
-        # separate process: simulator native libs (SAPIEN/PhysX) can crash when loaded after CoACD/OCC
-        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        # also separate: simulator native libs (SAPIEN/PhysX) can crash when loaded after CoACD/OCC
         subprocess.run([sys.executable, "-m", "cad2urdf.validate", str(args.out), "--sims",
                         ",".join(dict.fromkeys(["yourdfpy", *fin.checks]))], env=env)
     if review:
@@ -151,7 +153,8 @@ FRONT_ENDS: dict[tuple[str, str], FrontEnd] = {
         ],
         needs=["assembly URL (the /e/ element must be the assembly tab)", "API keys in the environment"],
         caveats=["Revolute mates without limits become continuous joints: set limits in Onshape or the spec.",
-                 "Ball/planar mates are not joints here (reported as REVIEW)."],
+                 "Planar mates become two slides and a spin (passive); ball mates are not joints (reported as REVIEW).",
+                 "Screws and nuts mated to a part are fixed to it, never joints."],
     ),
     ("onshape", "urdf-export"): FrontEnd(
         tool="Onshape native URDF export (v1.212+, Mar 2026)",

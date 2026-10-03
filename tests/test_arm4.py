@@ -99,3 +99,14 @@ def test_self_collision_matrix(robot, tmp_path):
     adjacent = {p for p, r in disabled.items() if r == "Adjacent"}
     assert adjacent == {tuple(sorted((j.parent, j.child))) for j in robot.joints.values()}
     assert ("finger_left", "finger_right") in disabled  # limits keep the jaws apart
+
+
+def test_bad_part_inertia_does_not_crash_the_link():
+    from types import SimpleNamespace as NS
+
+    good = NS(mass=1.0, com=np.zeros(3), inertia=np.eye(3) * 0.01)
+    nan = NS(mass=2.0, com=np.zeros(3), inertia=np.full((3, 3), np.nan))
+    mass, com, inertia = model.combine_inertia([good, nan], np.zeros(3))
+    assert mass == 1.0 and np.isfinite(inertia).all()  # the unusable part is ignored
+    assert model.combine_inertia([nan], np.zeros(3))[0] == 0.0
+    assert model.check_inertia("x", np.full((3, 3), np.nan), 1.0)  # reported, not raised

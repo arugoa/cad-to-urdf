@@ -7,7 +7,8 @@
 
     FASTENED / rigid sub-assembly -> same link      REVOLUTE -> revolute (continuous without limits)
     SLIDER -> prismatic                              CYLINDRICAL / PIN_SLOT -> revolute (REVIEW)
-    gear / rack / screw relations -> mimic           BALL / PLANAR / ... -> ignored (REVIEW)
+    gear / rack / screw relations -> mimic           PLANAR -> 2 slides + a rotation (massless links between)
+    mates on fasteners (screws, nuts) -> fastened    BALL / ... -> ignored (REVIEW)
 
   Naming conventions (as in onshape-to-robot): if any mate is named ``dof_*``, only those are joints and
   ``_inv`` flips the axis; ``closing_*`` mates close loops; joints named ``*passive*`` get no actuator and
@@ -36,7 +37,7 @@ from scipy.spatial.transform import Rotation
 
 from .model import CollisionGeom, Joint, Link, Robot, _per, check_inertia, combine_inertia
 from .step import Part
-from .util import UnionFind, slug
+from .util import UnionFind, is_fastener, slug
 
 
 def _pose(el: ET.Element | None) -> np.ndarray:
@@ -309,6 +310,7 @@ class Mate:
     occ: list[tuple[str, ...]]  # two occurrence paths (may point at sub-assemblies)
     cs: list[np.ndarray]  # two 4x4 mate frames in their occurrence's frame
     limits: tuple[float, float] | None = None
+    planar_limits: dict | None = None  # PLANAR: {"x": (lo, hi), "y": ..., "z": ...} (z is the rotation)
     relations: list = field(default_factory=list)
 
 
@@ -335,6 +337,11 @@ def _limits(client: Client, ref: dict, mates: dict[str, Mate]) -> None:
             pm = p.get("message", p)
             params[pm.get("parameterId")] = pm.get("expression", pm.get("value"))
         if str(params.get("limitsEnabled")).lower() != "true":
+            continue
+        if mates[fid].type == "PLANAR":
+            lim = {k: (parse_quantity(params.get(f"limit{p}Min")), parse_quantity(params.get(f"limit{p}Max")))
+                   for k, p in (("x", "X"), ("y", "Y"), ("z", "AxialZ"))}
+            mates[fid].planar_limits = {k: v for k, v in lim.items() if None not in v}
             continue
         # sliders use limitZ*, rotations limitAxialZ* (both are always present)
         pre = "limitZ" if mates[fid].type == "SLIDER" else "limitAxialZ"
@@ -396,6 +403,8 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
                 named_rigid = any(re.search(p, inst["name"], re.I) for p in rigid_patterns)
                 walk(sub, path, rigid if rigid else (path if (named_rigid or not flexible) else None))
             elif inst["type"] == "Part":
+                if not inst.get("partId"):  # e.g. a surface or deleted part: no mesh to fetch
+                    continue
                 bt = body_type.get((inst["documentId"], inst["elementId"], inst["partId"]), "solid")
                 if bt not in ("solid", "composite") or inst["id"] in frame_ids:
                     continue
@@ -457,7 +466,8 @@ def _mesh_and_mass(client: Client, occ: Occ, density: float, top_did: str | None
         mass = float(body["mass"][0])
         com = (occ.T @ np.r_[np.array(body["centroid"][:3], float), 1.0])[:3]
         I = np.array(body["inertia"][:9], float).reshape(3, 3)  # about the centroid, part frame
-        return mesh, mass, com, R @ I @ R.T, float(body.get("volume", [mesh.volume])[0])
+        if np.isfinite([mass, *com, *I.ravel()]).all():  # else: fall through to the mesh estimate
+            return mesh, mass, com, R @ I @ R.T, float(body.get("volume", [mesh.volume])[0])
     # no material assigned in Onshape: uniform density on the mesh
     m = mesh.copy()
     if not m.is_watertight:
@@ -466,6 +476,45 @@ def _mesh_and_mass(client: Client, occ: Occ, density: float, top_did: str | None
     return mesh, float(m.mass), np.array(m.center_mass), np.array(m.moment_inertia), float(m.volume)
 
 
+
+
+def _planar_joints(m: Mate, F: list, c: int, jname: str, parent: str, child: str, spec: dict,
+                   review: list) -> tuple[dict, dict]:
+    """A PLANAR mate (slide x, slide y, spin z in the mate frame) as a chain: parent -x-> dummy -y-> dummy -z-> child.
+
+    URDF has no 3-DOF joint that every simulator reads, so two massless links carry the slides. The joints are
+    passive unless the spec names an actuator.
+    """
+    ov = spec.get("joints", {}) or {}
+    x_w, y_w, z_w = (F[0][:3, k] for k in range(3))
+    d = F[0][:3, 3] - F[1][:3, 3]
+    sign = 1.0 if c == 0 else -1.0
+    lim = m.planar_limits or {}
+    if not lim:
+        review.append(f"joints.{jname}: planar mate without limits; slides get a placeholder +/-0.1 m")
+    origin = F[c][:3, 3].copy()
+    links, joints = {}, {}
+    prev = parent
+    for tag, axis, q_now, kind in (("x", x_w, float(d @ x_w), "prismatic"), ("y", y_w, float(d @ y_w), "prismatic"),
+                                   ("z", z_w, 0.0, "continuous")):
+        name = f"{jname}_{tag}"
+        end = child if tag == "z" else f"{jname}_{tag}_link"
+        lo = hi = 0.0
+        if kind == "prismatic":
+            lo, hi = sorted(sign * (v - q_now) for v in lim.get(tag, (-0.1 + q_now, 0.1 + q_now)))
+        elif tag in lim:
+            kind = "revolute"
+            lo, hi = sorted(sign * v for v in lim[tag])
+        if end != child:
+            links[end] = Link(end)
+            links[end].origin = origin.copy()
+        j_ov = ov.get(name, {})
+        joints[name] = Joint(name=name, type=kind, parent=prev, child=end, origin=origin.copy(), axis=axis,
+                             lower=j_ov.get("limits", [lo, hi])[0], upper=j_ov.get("limits", [lo, hi])[1],
+                             effort=j_ov.get("effort", 10.0), velocity=j_ov.get("velocity", 5.0),
+                             actuator=dict((spec.get("actuators", {}) or {}).get(name, {"kind": "none"})))
+        prev = end
+    return links, joints
 
 
 def _named_actuator(jname: str, spec: dict) -> dict:
@@ -564,6 +613,10 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
                                                                   "BALL", "FASTENED"):
             closing.append(m)
             continue
+        if not m.name.lower().startswith("dof_") and m.type != "FASTENED" and any(
+                all(is_fastener(occs[l].name) for l in leaves_under(o)) for o in m.occ):
+            uf.union(a, b)  # a screw or nut mated with a slot/cylindrical mate is still just fixed to its part
+            continue
         if use_dof and not m.name.lower().startswith("dof_"):
             # dof_ mode: fastened mates still join, other mates only align parts
             if m.type == "FASTENED":
@@ -571,7 +624,7 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             continue
         if m.type == "FASTENED":
             uf.union(a, b)
-        elif m.type in ("REVOLUTE", "SLIDER", "CYLINDRICAL", "PIN_SLOT"):
+        elif m.type in ("REVOLUTE", "SLIDER", "CYLINDRICAL", "PIN_SLOT", "PLANAR"):
             moving.append(m)
             if m.type in ("CYLINDRICAL", "PIN_SLOT"):
                 review.append(f"mate {m.name}: {m.type} (rotates AND slides) exported as revolute")
@@ -655,6 +708,14 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             jname = slug(raw[:-4] if flip else raw, lower=True)
             while jname in joints:
                 jname += "_"
+            if m.type == "PLANAR":
+                pl, pj = _planar_joints(m, F, c, jname, gname[pg], name, spec, review)
+                links.update(pl)
+                joints.update(pj)
+                joint_of_mate[m.feature_id] = jname + "_z"
+                link.origin = F[c][:3, 3].copy()
+                links[name] = link
+                continue
             jtype = "prismatic" if m.type == "SLIDER" else "revolute"
             # Onshape limits are entity 0's motion relative to entity 1 from the mate's zero; our zero is the
             # current pose and the child moves along +axis_w: shift by the current value, flip if child is 1
@@ -702,6 +763,8 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             review.append(f"joints.{js[1]}: mimics {js[0]} x {ratio} from {rel.get('relationType')} relation")
 
     for link in links.values():
+        if not link.parts:  # a massless carrier between planar-joint axes
+            continue
         link.mass, link.com, link.inertia = combine_inertia(link.parts, link.origin)
         for issue in check_inertia(link.name, link.inertia, link.mass):
             print("  WARNING", issue)

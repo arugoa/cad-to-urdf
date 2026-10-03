@@ -147,6 +147,21 @@ def _mass_inertia(link) -> tuple[float, np.ndarray]:
     return m, np.eye(3) * m * 1e-4  # a 1 cm-ish sphere-like inertia
 
 
+TIMESTEP = 0.002
+
+
+def _servo_dynamics(j, dt: float) -> tuple[float, float]:
+    """(damping, armature) that keep a position servo stable and inside its speed limit.
+
+    Armature: an explicit spring kp on a tiny inertia oscillates when sqrt(kp/I)*dt is not small, so the
+    reflected inertia is at least 16*kp*dt^2. Damping: the torque clip does not bound speed (kp*error can
+    dwarf the effort), so damping of effort/velocity makes the speed limit the terminal speed.
+    """
+    kp = j.actuator.get("kp", 0.0) if j.actuator.get("kind", "none") == "position" else 0.0
+    damping = max(j.damping, j.effort / j.velocity) if j.effort and j.velocity and kp else j.damping
+    return damping, max(j.armature, 16 * kp * dt * dt)
+
+
 def build_mjcf(
     robot: Robot,
     meshdir: str = "../meshes",
@@ -161,7 +176,7 @@ def build_mjcf(
     fr = spec.get("contact", {}).get("friction", [1.0, 0.005, 0.0001])
     root = ET.Element("mujoco", model=robot.name)
     ET.SubElement(root, "compiler", angle="radian", meshdir=meshdir, autolimits="true")
-    opt = ET.SubElement(root, "option", timestep="0.002", integrator="implicitfast")
+    opt = ET.SubElement(root, "option", timestep=str(TIMESTEP), integrator="implicitfast")
     if not filterparent:
         ET.SubElement(opt, "flag", filterparent="disable")
 
@@ -208,9 +223,10 @@ def build_mjcf(
         if j is None and robot.floating_base and floating:
             ET.SubElement(body, "freejoint", name="root")
         if j is not None and j.type != "fixed":
+            damping, armature = _servo_dynamics(j, TIMESTEP)
             attrs = dict(name=j.name, type="slide" if j.type == "prismatic" else "hinge",
                          axis=fmt(robot.axis_local(j)),
-                         damping=f"{j.damping:.6g}", frictionloss=f"{j.friction:.6g}", armature=f"{j.armature:.6g}")
+                         damping=f"{damping:.6g}", frictionloss=f"{j.friction:.6g}", armature=f"{armature:.6g}")
             if j.type != "continuous":
                 attrs["range"] = fmt((j.lower, j.upper))
             if j.effort:

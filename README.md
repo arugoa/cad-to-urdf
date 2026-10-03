@@ -5,7 +5,7 @@ Converts CAD assemblies (Onshape, SolidWorks, Fusion, Creo, or plain STEP) into 
 - URDF, plus an SRDF with a sampled self-collision matrix
 - native MJCF with actuators, armature, mimic and loop constraints, contact excludes and keyframes
 - a ManiSkill agent class, an Isaac Lab `ArticulationCfg` and Gazebo `ros2_control` config
-- convex collision geometry per link (primitives where they fit, CoACD where they don't, at most 8 pieces per link)
+- convex collision geometry per link (primitives where they fit, CoACD where they don't, at most 12 pieces per link)
 - static scenery (competition fields) from surface-only STEP files
 
 Everything is deterministic: the same inputs give the same outputs. What geometry can't tell you (joint limits, materials) goes in a small spec file, drafted for you, or is handled by the included [`cad2sim` agent skill](#agent-skill).
@@ -58,7 +58,7 @@ python -m cad2urdf.route --cad onshape --format native --sim maniskill --run \
     --input "https://cad.onshape.com/documents/<doc>/w/<workspace>/e/<assembly>" --out build/myrobot
 ```
 
-Naming conventions from onshape-to-robot are honoured: if any mate is named `dof_*`, only those mates are joints (`_inv` flips the axis); `closing_*` mates close loops; joints named `*passive*` get no actuator and `*_speed` a velocity actuator; `frame_*` parts are markers. Responses are cached in `~/.cache/cad2urdf/onshape`.
+Naming conventions from onshape-to-robot are honoured: if any mate is named `dof_*`, only those mates are joints (`_inv` flips the axis); `closing_*` mates close loops; joints named `*passive*` get no actuator and `*_speed` a velocity actuator; `frame_*` parts are markers; planar mates become two slides and a spin, and a screw or nut mated to a part stays fixed to it. Responses are cached in `~/.cache/cad2urdf/onshape`.
 
 ## Usage
 
@@ -130,7 +130,7 @@ joints:
   gripper_to_finger_2: {mimic: {joint: gripper_to_finger}, axis_sign: -1}
 dynamics:  {default: {damping: 0.5, friction: 0.05, armature: 0.01}}
 actuators: {default: {kind: position, kp: 200, kv: 10}, gripper_to_finger_2: {kind: none}}
-collision: {default: {mode: auto, max_geoms: 8}, finger: {mode: decompose}}
+collision: {default: {mode: auto, max_geoms: 12}, finger: {mode: decompose}}
 simplify:  {drop_fasteners: true, visual_faces_per_link: 20000}   # or `simplify: false`
 root_rpy:  [1.5708, 0, 0]                                     # Y-up export -> Z-up
 closures:                                                     # loops a URDF tree can't hold

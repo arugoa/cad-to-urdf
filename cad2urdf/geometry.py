@@ -5,10 +5,10 @@
   error bound. Spec: ``simplify: {drop_fasteners: true, visual_faces_per_link: 20000}`` or ``false``.
 * collision, per link (``collision: {default: {mode: ...}}``): none, box (one OBB), spheres (a few per
   part), primitives (box/cylinder/sphere per part, else hull), hull (one per link), auto (default:
-  primitive, small-part hull, else CoACD per part), decompose (CoACD on the whole link), mesh (raw visual
+  primitive, small-part hull, else CoACD per part; thin plates count by extent, bolt-sized parts are skipped), decompose (CoACD on the whole link), mesh (raw visual
   mesh), keep (the input URDF's own). Every piece is convex, at most ``max_hull_vertices`` (64: PhysX GPU),
-  and each link gets at most ``max_geoms`` pieces (8; one for links under ``small_link_fraction`` of the
-  robot's volume).
+  and each link gets at most ``max_geoms`` pieces (12). A link under ``small_link_fraction`` of the
+  robot's volume gets one piece if that fits tightly, else up to 4 (a bracket's hull would fill its gap).
 * ``limit_sweep``: moves each child to its limits and measures the solid volume it shares with its parent;
   a jump means the limit drives the part through material (simulators can't catch this).
 """
@@ -105,7 +105,8 @@ def simplify_robot(robot: Robot, drop_fasteners: bool = True, visual_faces_per_l
         before = int(sum(len(m.faces) for m in link.visuals.values()))
         parts = list(link.parts)
         dropped = [p for p in parts if drop_fasteners and is_fastener(p.name)]
-        keep = [p for p in parts if p not in dropped] or parts  # never empty a link completely
+        gone = {id(p) for p in dropped}  # identity, not ==: Part equality compares numpy arrays
+        keep = [p for p in parts if id(p) not in gone] or parts  # never empty a link completely
         if not keep or all(p.mesh is None for p in keep):
             report[link.name] = {"dropped": 0, "faces_before": before, "faces_after": before}
             continue
@@ -177,9 +178,17 @@ def _cap_vertices(hull: trimesh.Trimesh, max_vertices: int) -> trimesh.Trimesh:
     return reduced
 
 
+MIN_THICKNESS = 0.002  # m: a flat plate's hull has no volume (MuJoCo rejects it), so it becomes a thin box
+
+
 def _hull_geom(mesh: trimesh.Trimesh, max_v: int, source: str) -> CollisionGeom:
-    hull = _cap_vertices(mesh.convex_hull, max_v)
-    return CollisionGeom("mesh", np.eye(4), mesh=hull, source=source)
+    hull = mesh.convex_hull
+    obb = hull.bounding_box_oriented
+    if hull.volume < 1e-12 or min(obb.primitive.extents) < 0.25 * MIN_THICKNESS:
+        ext = np.maximum(obb.primitive.extents, MIN_THICKNESS)
+        g = CollisionGeom("box", proper_frame(obb.primitive.transform), tuple(ext), source=source + " (flat: box)")
+        return _axis_align_box(g)
+    return CollisionGeom("mesh", np.eye(4), mesh=_cap_vertices(hull, max_v), source=source)
 
 
 def proper_frame(T: np.ndarray) -> np.ndarray:
@@ -236,13 +245,9 @@ def link_collisions(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
     if mode == "hull":
         return [_hull_geom(whole, max_v, "link-hull")]
     if mode == "primitives":
-        total = sum(p.volume for p in link.parts)
-        min_frac = cfg.get("min_part_fraction", 0.02)
         min_fill = cfg.get("min_fill", 0.55)
         out = []
-        for p in link.parts:
-            if p.volume < min_frac * total:
-                continue  # culled: bolts, pins, small brackets
+        for p in _significant(link, link.parts, cfg.get("min_part_fraction", 0.02)):
             m = link.to_link(p.mesh)
             g, fill = _best_primitive(m)
             if fill >= min_fill:
@@ -263,15 +268,31 @@ def link_collisions(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
     raise ValueError(f"unknown collision mode {mode!r}")
 
 
+MAX_CANDIDATES = 60  # parts per link that get a collision shape before the merge to the piece budget
+COVER_VOLUME = 0.85  # fraction of a link's volume its collision candidates must account for
+
+
+def _significant(link: Link, parts, min_frac: float):
+    """Parts worth a collision shape: not a bolt-sized speck. Thin plates count by extent, not volume."""
+    total = sum(p.volume for p in link.parts) or 1.0
+    diag = float(np.linalg.norm(link.mesh().extents)) or 1.0
+    keep = {id(p) for p in parts if p.mesh is not None
+            and (p.volume >= min_frac * total or float(np.linalg.norm(p.mesh.extents)) >= 0.35 * diag)}
+    covered = 0.0  # a link made of hundreds of small parts: the biggest ones together must still be covered
+    for p in sorted((p for p in parts if p.mesh is not None), key=lambda p: -p.volume)[:MAX_CANDIDATES]:
+        if covered >= COVER_VOLUME * total:
+            break
+        keep.add(id(p))
+        covered += p.volume
+    return [p for p in parts if id(p) in keep]
+
+
 def _auto(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
     """Per part: a primitive if it fills >= min_fill, a hull if small or nearly convex, else CoACD."""
     total = sum(p.volume for p in link.parts) or 1.0
-    min_frac = cfg.get("min_part_fraction", 0.02)
     min_fill = cfg.get("min_fill", 0.8)
     out = []
-    for p in link.parts:
-        if p.volume < min_frac * total:
-            continue
+    for p in _significant(link, link.parts, cfg.get("min_part_fraction", 0.02)):
         m = link.to_link(p.mesh)
         g, fill = _best_primitive(m)
         if fill >= min_fill:
@@ -290,10 +311,8 @@ def _auto(link: Link, cfg: dict, max_v: int) -> list[CollisionGeom]:
 def _spheres(link: Link, cfg: dict) -> list[CollisionGeom]:
     """A few spheres per significant part, ``max_spheres`` per link shared by surface area."""
 
-    total = sum(p.volume for p in link.parts) or 1.0
-    min_frac = cfg.get("min_part_fraction", 0.02)
     budget = cfg.get("max_spheres", 32)
-    kept = [p for p in link.parts if p.mesh is not None and p.volume >= min_frac * total]
+    kept = _significant(link, link.parts, cfg.get("min_part_fraction", 0.02))
     area = sum(p.mesh.area for p in kept) or 1.0
     out = []
     for p in kept:
@@ -318,8 +337,7 @@ def _coacd(mesh: trimesh.Trimesh, cfg: dict, max_v: int, tag: str) -> list[Colli
         preprocess_mode="auto",
         seed=0,
     )
-    return [CollisionGeom("mesh", np.eye(4), mesh=_cap_vertices(trimesh.Trimesh(v, f).convex_hull, max_v),
-                          source=f"{tag}-{i}") for i, (v, f) in enumerate(parts)]
+    return [_hull_geom(trimesh.Trimesh(v, f), max_v, f"{tag}-{i}") for i, (v, f) in enumerate(parts)]
 
 
 def geom_to_mesh(g: CollisionGeom) -> trimesh.Trimesh:
@@ -395,10 +413,17 @@ def build_collisions(robot: Robot, with_metrics: bool = True) -> None:
         link.collisions = link_collisions(link, cfg, max_v)
         if link.collision_mode in ("auto", "decompose", "primitives") and link.collisions:
             small = sum(p.volume for p in link.parts) < cfg.get("small_link_fraction", 0.005) * total
-            budget = 1 if small else cfg.get("max_geoms", 8)
-            if len(link.collisions) > budget and budget == 1:
-                g, fill = _best_primitive(link.mesh())
-                link.collisions = [g] if fill >= cfg.get("min_fill", 0.8) else [_hull_geom(link.mesh(), max_v, "small link hull")]
+            budget = cfg.get("max_geoms", 12)
+            if small and len(link.collisions) > 1:
+                whole = link.mesh()
+                g, fill = _best_primitive(whole)
+                hull_fill = whole.volume / max(whole.convex_hull.volume, 1e-12)
+                if fill >= cfg.get("min_fill", 0.8):
+                    link.collisions = [g]
+                elif hull_fill >= 0.6:  # nearly convex: one hull is honest
+                    link.collisions = [_hull_geom(whole, max_v, "small link hull")]
+                else:  # a bracket or U-shape: a single hull would fill the gap
+                    link.collisions = _merge_to_budget(link.collisions, min(budget, 4), max_v)
             else:
                 link.collisions = _merge_to_budget(link.collisions, budget, max_v)
         if with_metrics and link.collisions and link.parts:
@@ -415,10 +440,20 @@ def _manifold(mesh: trimesh.Trimesh):
     return None if m.is_empty() else m
 
 
-def _union(parts):
+SWEEP_FACES = 150_000  # per link: the sweep unions the largest parts up to this many triangles
+
+
+def _union(parts, max_faces: int = SWEEP_FACES):
     import manifold3d as mf
 
-    solids = [s for s in (_manifold(p.mesh) for p in parts) if s is not None]
+    solids, faces = [], 0
+    for p in sorted(parts, key=lambda p: -p.volume):  # a 1,000-part link would otherwise exhaust memory
+        if p.mesh is None or faces + len(p.mesh.faces) > max_faces:
+            continue
+        s = _manifold(p.mesh)
+        if s is not None:
+            solids.append(s)
+            faces += len(p.mesh.faces)
     return mf.Manifold.batch_boolean(solids, mf.OpType.Add) if solids else None, len(solids)
 
 
@@ -435,11 +470,17 @@ def _motion(joint, q: float) -> np.ndarray:
 
 def limit_sweep(robot: Robot, tol_cm3: float = 1.0) -> dict:
     out, flagged = {}, []
-    solids = {name: _union(link.parts) for name, link in robot.links.items()}
+    solids: dict = {}
+
+    def solid(name):  # built on first use: only links beside a moving joint are needed
+        if name not in solids:
+            solids[name] = _union(robot.links[name].parts)
+        return solids[name]
+
     for j in robot.joints.values():
         if j.type not in ("revolute", "prismatic") or j.mimic:
             continue
-        (child, _), (parent, _) = solids[j.child], solids[j.parent]
+        (child, _), (parent, _) = solid(j.child), solid(j.parent)
         if child is None or parent is None:
             out[j.name] = {"skipped": "no closed part geometry"}
             continue

@@ -212,3 +212,79 @@ def test_joint_name_conventions_for_actuators():
     assert frontends._named_actuator("wheel1_speed", spec)["kind"] == "velocity"  # drive wheel
     assert frontends._named_actuator("left_knee", spec)["kind"] == "position"
     assert frontends._named_actuator("wheel2_passive3", spec)["kp"] == 1  # an explicit spec entry wins
+
+
+class PlanarFakeClient(FakeClient):
+    """The carriage rides a PLANAR mate (slide x, slide y, spin z) instead of a slider."""
+
+    def get(self, path, params=None, binary=False):
+        if path.endswith("/features"):
+            lim = [("limitsEnabled", True), ("limitXMin", "0 in"), ("limitXMax", "2 in"), ("limitYMin", "-1 in"),
+                   ("limitYMax", "1 in")]
+            return {"features": [{"message": {"featureId": "f3", "parameters": [
+                {"message": {"parameterId": k, ("value" if k == "limitsEnabled" else "expression"): v}}
+                for k, v in lim]}}]}
+        if "/assemblies/" in path:
+            a = json.loads(json.dumps(ASSEMBLY))
+            a["rootAssembly"]["features"][2] = mate("f3", "Carriage slide", "PLANAR", ["i_arm"], cs((0.2, 0, 0)),
+                                                    ["i_slide"], cs((0, 0, 0)))
+            return a
+        return super().get(path, params, binary)
+
+
+def test_planar_mate_becomes_two_slides_and_a_spin():
+    r = frontends.build_from_onshape({"source": URL}, None, client=PlanarFakeClient())
+    x, y, z = (r.joints[f"carriage_slide_{k}"] for k in "xyz")
+    assert [(j.type, j.parent, j.child) for j in (x, y, z)] == [
+        ("prismatic", "arm", "carriage_slide_x_link"), ("prismatic", "carriage_slide_x_link", "carriage_slide_y_link"),
+        ("continuous", "carriage_slide_y_link", "carriage")]
+    np.testing.assert_allclose(x.axis, [1, 0, 0])
+    np.testing.assert_allclose(y.axis, [0, 1, 0])
+    np.testing.assert_allclose(z.axis, [0, 0, 1])
+    np.testing.assert_allclose([x.lower, x.upper], [-2 * 0.0254, 0.0], atol=1e-9)  # carriage is entity 1: flipped
+    assert not r.links["carriage_slide_x_link"].parts  # massless carrier
+    assert all(j.actuator == {"kind": "none"} for j in (x, y, z))
+
+
+class ScrewFakeClient(FakeClient):
+    """A screw on the arm with a REVOLUTE mate: it is fixed to the arm, not a joint."""
+
+    def get(self, path, params=None, binary=False):
+        if "/assemblies/" in path and not path.endswith("/features"):
+            a = json.loads(json.dumps(ASSEMBLY))
+            a["rootAssembly"]["instances"].append(part("i_screw", "M3x8_SHCS", "JE"))
+            a["rootAssembly"]["occurrences"].append({"path": ["i_screw"], "transform": T((0.1, 0, 0.32))})
+            a["rootAssembly"]["features"].append(
+                mate("f8", "screw turn", "REVOLUTE", ["i_arm"], cs((0.1, 0, 0.02)), ["i_screw"], cs((0, 0, 0))))
+            return a
+        if "/partid/JE/" in path:
+            return super().get(path.replace("/JE/", "/JD/"), params, binary)
+        return super().get(path, params, binary)
+
+
+def test_screw_mates_are_fixed_not_joints():
+    r = frontends.build_from_onshape({"source": URL}, None, client=ScrewFakeClient())
+    assert sorted(r.joints) == ["carriage_slide", "shoulder"]
+    assert any("m3x8_shcs" in p.name for p in r.links["arm"].parts)
+
+
+def test_planar_chain_loads_and_moves_in_mujoco(tmp_path):
+    import mujoco
+
+    from cad2urdf import geometry, writers
+
+    r = frontends.build_from_onshape({"source": URL}, None, client=PlanarFakeClient())
+    geometry.build_collisions(r, with_metrics=False)
+    writers.export_meshes(r, tmp_path / "meshes")
+    writers.write_mjcf(r, tmp_path / "mjcf" / "r.xml", meshdir="../meshes")
+    writers.write_urdf(r, tmp_path / "r.urdf")
+    m = mujoco.MjModel.from_xml_path(str(tmp_path / "mjcf" / "r.xml"))
+    d = mujoco.MjData(m)
+    mujoco.mj_kinematics(m, d)
+    start = d.body("carriage").xpos.copy()
+    qadr = {m.joint(i).name: m.jnt_qposadr[i] for i in range(m.njnt)}
+    d.qpos[qadr["carriage_slide_x"]] = -0.03
+    d.qpos[qadr["carriage_slide_y"]] = -0.02
+    mujoco.mj_kinematics(m, d)
+    # the planar axes are the mate's x and y; the arm is rotated none at q=0, so the carriage slides in world x, y
+    np.testing.assert_allclose(d.body("carriage").xpos - start, [-0.03, -0.02, 0.0], atol=1e-9)

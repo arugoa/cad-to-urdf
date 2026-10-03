@@ -194,7 +194,10 @@ def _per(spec_section: dict, key: str) -> dict:
 
 def combine_inertia(parts: list[Part], frame_origin: np.ndarray):
     """Total mass, COM (link frame) and inertia about the COM via the parallel-axis theorem."""
+    parts = [p for p in parts if p.mass > 0 and np.isfinite(p.mass) and np.isfinite(p.inertia).all()]
     mass = sum(p.mass for p in parts)
+    if mass <= 0:  # nothing usable: a massless link (check_inertia reports it)
+        return 0.0, np.zeros(3), np.zeros((3, 3))
     com_world = sum(p.mass * p.com for p in parts) / mass
     inertia = np.zeros((3, 3))
     for p in parts:
@@ -208,6 +211,8 @@ def check_inertia(name: str, inertia: np.ndarray, mass: float) -> list[str]:
     issues = []
     if mass <= 0:
         issues.append(f"{name}: non-positive mass {mass}")
+    if not np.isfinite(inertia).all():
+        return issues + [f"{name}: inertia is not finite"]
     if not np.allclose(inertia, inertia.T, atol=1e-12):
         issues.append(f"{name}: inertia not symmetric")
     ev = np.linalg.eigvalsh(inertia)
