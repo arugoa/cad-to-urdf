@@ -164,7 +164,7 @@ def test_dof_convention_patterns_and_origin_mates():
     assert r.joints["shoulder"].child == "arm"
     base = {p.name.split("/")[1] for p in r.links["base_link"].parts}
     assert {"post", "post_copy"} <= base  # pattern copy rigid with its seed
-    assert any("single entity" in x for x in r.review)
+    assert any("mated to the origin" in x for x in r.review)
 
 
 class ClosingFakeClient(FakeClient):
@@ -327,7 +327,53 @@ def test_three_planar_mates_are_a_rigid_joint():
 
 def test_two_planar_mates_leave_one_slide():
     r = frontends.build_from_onshape({"source": URL}, None, client=TwoPlanar())
-    j = r.joints["planar_1"]
+    j = r.joints["arm_planar_1"]  # a default mate name is prefixed with the link it moves
     assert j.type == "prismatic" and (j.parent, j.child) == ("base_link", "arm")
     np.testing.assert_allclose(np.abs(j.axis), [1, 0, 0], atol=1e-9)  # the planes' intersection line
-    assert not any(n.startswith("planar_1_") for n in r.joints)
+    assert not any(n.startswith("arm_planar_1_") for n in r.joints)
+
+
+def test_default_mate_names_are_made_unique_and_meaningful():
+    from cad2urdf.frontends import GENERIC_MATE
+
+    for n in ("Revolute 4", "Slider 1", "Pin slot 2", "planar_3", "Cylindrical 1"):
+        assert GENERIC_MATE.match(n), n
+    for n in ("Shoulder", "dof_wrist", "Revolute hip", "Carriage slide"):
+        assert not GENERIC_MATE.match(n), n
+
+
+class OriginClient(FakeClient):
+    """The arm turns about a world axis through an *origin* mate (second entity is the assembly origin),
+    and a FOV cone solid sits on the plate."""
+
+    def get(self, path, params=None, binary=False):
+        if "/assemblies/" in path and not path.endswith("/features"):
+            a = json.loads(json.dumps(ASSEMBLY))
+            ra = a["rootAssembly"]
+            ra["instances"].append(part("i_fov", "LidarFov", "JA"))
+            ra["occurrences"].append({"path": ["i_fov"], "transform": T((0, 0, 0.5))})
+            ra["features"][1] = {"id": "f2", "featureType": "mate", "suppressed": False, "featureData": {
+                "name": "Yaw", "mateType": "REVOLUTE", "matedEntities": [
+                    {"matedOccurrence": ["i_arm"], "matedCS": cs((0, 0, 0), z=(0, 0, 1))},
+                    {"matedOccurrence": [], "matedCS": cs((0, 0, 0.30), z=(0, 0, 1))}]}}
+            return a
+        return super().get(path, params, binary)
+
+
+def test_origin_mate_moves_the_body_against_the_ground_and_fov_solids_are_skipped():
+    r = frontends.build_from_onshape({"source": URL}, None, client=OriginClient())
+    yaw = r.joints["yaw"]
+    assert (yaw.type, yaw.parent, yaw.child) == ("revolute", "base_link", "arm")  # limits come from the fake feature list
+    np.testing.assert_allclose(yaw.axis, [0, 0, 1], atol=1e-12)
+    np.testing.assert_allclose(yaw.origin, [0, 0, 0.30], atol=1e-12)  # where the origin frame and the arm frame meet
+    assert any("stands in for it" in x for x in r.review)
+    assert not any("lidarfov" in p.name for l in r.links.values() for p in l.parts)
+
+
+def test_non_physical_names():
+    from cad2urdf.util import is_non_physical
+
+    for n in ("FOVCone <1>", "LidarFov <1>", "camera_frustum", "Vision Cone"):
+        assert is_non_physical(n), n
+    for n in ("Referee Mount", "Cone Bearing", "Shaft", "Safety Cover"):
+        assert not is_non_physical(n), n

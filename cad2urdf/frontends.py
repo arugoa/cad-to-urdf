@@ -37,7 +37,7 @@ from scipy.spatial.transform import Rotation
 
 from .model import CollisionGeom, Joint, Link, Robot, _per, check_inertia, combine_inertia
 from .step import Part
-from .util import UnionFind, is_fastener, slug
+from .util import UnionFind, is_fastener, is_non_physical, slug
 
 
 def _pose(el: ET.Element | None) -> np.ndarray:
@@ -312,7 +312,17 @@ class Mate:
     limits: tuple[float, float] | None = None
     planar_limits: dict | None = None  # PLANAR: {"x": (lo, hi), "y": ..., "z": ...} (z is the rotation)
     axis_world: np.ndarray | None = None  # overrides the mate frame's z as the joint axis (planar pairs -> slide)
+    origin_prefix: tuple = ()  # the (sub-)assembly whose origin a one-sided mate refers to
+    world_cs: dict = field(default_factory=dict)  # entity index -> world frame, for the origin side
+
+    def frame(self, k: int, occ_T: dict) -> np.ndarray:
+        """Mate frame of entity ``k`` in the world."""
+        return self.world_cs[k] if k in self.world_cs else occ_T[self.occ[k]] @ self.cs[k]
     relations: list = field(default_factory=list)
+
+
+# Onshape's default mate names; they carry no meaning, so the child link's name is added
+GENERIC_MATE = re.compile(r"^(revolute|slider|cylindrical|planar|ball|pin[ _]?slot|parallel|fastened)[ _]*\d*$", re.I)
 
 
 def _cs(m: dict) -> np.ndarray:
@@ -404,7 +414,7 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
                 named_rigid = any(re.search(p, inst["name"], re.I) for p in rigid_patterns)
                 walk(sub, path, rigid if rigid else (path if (named_rigid or not flexible) else None))
             elif inst["type"] == "Part":
-                if not inst.get("partId"):  # e.g. a surface or deleted part: no mesh to fetch
+                if not inst.get("partId") or is_non_physical(inst["name"]):  # no mesh, or a FOV cone / keep-out solid
                     continue
                 bt = body_type.get((inst["documentId"], inst["elementId"], inst["partId"]), "solid")
                 if bt not in ("solid", "composite") or inst["id"] in frame_ids:
@@ -419,10 +429,10 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
                 continue
             d = f["featureData"]
             if f["featureType"] == "mate":
-                ents = d["matedEntities"]
-                ents = [e for e in ents if e.get("matedOccurrence")]  # drop "mated to origin" entities
+                ents = d["matedEntities"]  # an empty occurrence path is the (sub-)assembly origin: kept as None
                 mates.append(Mate(d.get("name", f["id"]), f["id"], d["mateType"],
-                                  [prefix + tuple(e["matedOccurrence"]) for e in ents], [_cs(e["matedCS"]) for e in ents]))
+                                  [prefix + tuple(e["matedOccurrence"]) if e.get("matedOccurrence") else None
+                                   for e in ents], [_cs(e["matedCS"]) for e in ents], origin_prefix=prefix))
             elif f["featureType"] == "mateRelation":
                 relations.append({**d, "prefix": prefix})
             elif f["featureType"] == "mateGroup":
@@ -499,7 +509,7 @@ def _resolve_planar(planar: list, uf: UnionFind, rep, occ_T: dict, review: list)
                 by_pair[tuple(sorted((a, b), key=str))].append(m)
         pending, welded = [], False
         for ms in by_pair.values():
-            normals = np.array([(occ_T[m.occ[0]] @ m.cs[0])[:3, 2] for m in ms])
+            normals = np.array([m.frame(0, occ_T)[:3, 2] for m in ms])
             rank = int((np.linalg.svd(normals / np.linalg.norm(normals, axis=1, keepdims=True),
                                       compute_uv=False) > 0.05).sum())
             first = ms[0]
@@ -592,7 +602,7 @@ def _add_closures(robot: Robot, closing: list, gname: dict, group_of, occ_T: dic
         if la is None or lb is None or la == lb:
             review.append(f"mate {m.name}: closing mate between parts of one link (or off the tree); ignored")
             continue
-        world = (occ_T[m.occ[0]] @ m.cs[0])[:3, 3]
+        world = m.frame(0, occ_T)[:3, 3]
         anchors = [np.linalg.inv(robot.links[n].pose()) @ np.r_[world, 1.0] for n in (la, lb)]
         robot.closures.append({"name": slug(m.name, lower=True), "link1": la, "link2": lb,
                                "anchor1": anchors[0][:3], "anchor2": anchors[1][:3]})
@@ -623,10 +633,25 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
         return ls[0]
 
     # mates to instances the API didn't return (markers, sketches) aren't joints
+    def origin_anchor(prefix, body):
+        """A leaf standing in for the assembly origin: the grounded part, else the first part of that assembly."""
+        cands = [p for p in occs if p[: len(prefix)] == prefix and p[: len(body)] != body]
+        return next((p for p in cands if occs[p].fixed), cands[0] if cands else None)
+
     kept = []
     for m in mates:
+        if None in m.occ:  # mated to the origin: the joint is the body moving against the assembly's ground
+            k = m.occ.index(None)
+            body = m.occ[1 - k] if len(m.occ) == 2 else None
+            anchor = origin_anchor(m.origin_prefix, body) if body and leaves_under(body) else None
+            if anchor is None or m.type not in ("REVOLUTE", "SLIDER", "CYLINDRICAL", "PIN_SLOT", "PLANAR"):
+                review.append(f"mate {m.name}: mated to the origin ({m.type}); ignored")
+                continue
+            m.world_cs[k] = occ_T.get(m.origin_prefix, np.eye(4)) @ m.cs[k]
+            m.occ[k] = anchor
+            review.append(f"mate {m.name}: mated to the assembly origin; {occs[anchor].name} stands in for it")
         if len(m.occ) < 2:
-            review.append(f"mate {m.name}: has a single entity (mated to the origin/assembly); ignored")
+            review.append(f"mate {m.name}: has a single entity; ignored")
         elif all(leaves_under(p) for p in m.occ):
             kept.append(m)
         else:
@@ -748,13 +773,17 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
         if g in parent_of:
             pg, m, side = parent_of[g]
             c = 1 - side  # index of this (child) side in the mate
-            F = [occ_T[m.occ[k]] @ m.cs[k] for k in (0, 1)]  # both mate frames in world
+            F = [m.frame(k, occ_T) for k in (0, 1)]  # both mate frames in world
             axis_w = F[0][:3, 2] if m.axis_world is None else m.axis_world
             raw = m.name[4:] if m.name.lower().startswith("dof_") else m.name
             flip = raw.lower().endswith("_inv")
             jname = slug(raw[:-4] if flip else raw, lower=True)
+            if GENERIC_MATE.match(raw.removesuffix("_inv")):  # "Revolute 4" says nothing: name it after what it moves
+                jname = f"{name}_{jname}"
+            base, k = jname, 2
             while jname in joints:
-                jname += "_"
+                jname = f"{base}_{k}"
+                k += 1
             if m.type == "PLANAR":
                 pl, pj = _planar_joints(m, F, c, jname, gname[pg], name, spec, review)
                 links.update(pl)

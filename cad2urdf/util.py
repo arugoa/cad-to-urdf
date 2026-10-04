@@ -73,6 +73,14 @@ FASTENER = re.compile(r"screw|bolt|nut(?![a-z])|washer|rivet|standoff|dowel|(thr
 NOT_FASTENER = re.compile(r"lead.?screw|ball.?screw|acme|trapezoidal|threaded.?rod|worm", re.I)  # drive screws
 
 
+# solids that visualise a field of view or keep-out volume: not hardware, so never links, mass or collision
+NON_PHYSICAL = re.compile(r"fov|frustum|(vision|view|sight)[_ ]?cone|keep[_ ]?out|ghost", re.I)
+
+
+def is_non_physical(name: str) -> bool:
+    return bool(NON_PHYSICAL.search(name.split("/")[-1]))
+
+
 def is_fastener(name: str) -> bool:
     n = name.split("/")[-1]
     return bool(FASTENER.search(n)) and not NOT_FASTENER.search(n)
