@@ -12,6 +12,16 @@ Everything is deterministic: the same inputs give the same outputs. What geometr
 
 ![arm4: visual vs collision](docs/img/arm4_visual_vs_collision.png)
 
+## Demos
+
+Each clip shows the visual meshes (left) and the generated collision shapes (right) while every joint sweeps inside its limits. All 15 are in [`docs/demos/`](docs/demos).
+
+| | |
+|---|---|
+| ![arm4](docs/demos/arm4.gif) **arm4** (parametric sample, STEP) | ![SO-100](docs/demos/so100.gif) **SO-100** (STEP, drafted automatically) |
+| ![Orbita](docs/demos/orbita_parallel.gif) **Orbita** (Onshape, parallel mechanism with loop closures) | ![Quadruped](docs/demos/quadruped.gif) **Quadruped** (Onshape, 12 joints) |
+| ![Sigmaban](docs/demos/sigmaban_humanoid.gif) **Sigmaban humanoid** (Onshape, 20 joints) | ![Open Duck Mini](docs/demos/open_duck_mini.gif) **Open Duck Mini** (Onshape, 14 joints) |
+
 ## How it works
 
 You pick the CAD package, the export format and the simulator:
