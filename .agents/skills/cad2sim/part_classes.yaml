@@ -1,0 +1,25 @@
+# Part-name patterns (case-insensitive regular expressions, matched against the part name).
+# The code has no built-in name knowledge: it only acts on classes listed under `part_classes:` in the spec.
+# Deciding what a part IS belongs to the agent. Start from this file, then read the part list and adjust.
+#   route:  python -m cad2urdf.route ... --part-classes .agents/skills/cad2sim/part_classes.yaml
+#   spec:   part_classes: {fastener: [...], ...}   (a dict here, or a path to a file like this one)
+
+fastener:        # removed from visuals and collision, mass kept; their mates never become joints
+  - 'screw|bolt|nut(?![a-z])|washer|rivet|standoff|dowel'
+  - '(threaded|heat.?set)[_ ]?insert'
+  - '(?<![a-z])(shcs|bhcs|fhcs|msb\d+|m\d+x\d)'
+not_fastener:    # exceptions to `fastener`: drive screws are mechanisms
+  - 'lead.?screw|ball.?screw|acme|trapezoidal|threaded.?rod|worm'
+non_physical:    # visualisation solids, not hardware: never imported (Onshape)
+  - 'fov|frustum|(vision|view|sight)[_ ]?cone|keep[_ ]?out|ghost'
+ignore:          # placeholder geometry dropped from the STEP draft
+  - 'no.?blockage|keep.?out|zone|envelope|reference|clearance.?vol|dummy|placeholder'
+bearing:         # needs the name AND annular geometry (a "bearing plate" is a plate)
+  - 'bearing|(?<![a-z0-9])\d+x\d+x\d+(?![a-z0-9])|^mr\d+|^\d{4}(zz|rs|2rs)?$'
+gear:            # touching gears mesh rather than join
+  - '(?<![a-z])\d+t(?![a-z])|gear|pinion|pulley|sprocket'
+servo:           # servo bodies include their horn, so they touch both the mount and the driven part
+  - 'sts\d{4}|scs\d{2,4}|sm\d{2}bl|xl-?\d{3}|xm-?\d{3}|xh-?\d{3}|xc-?\d{3}|xw-?\d{3}'
+  - 'ax-?1[28]|mx-?\d{2}|dynamixel|feetech|servo|lx-?\d{3}|mg9\d{2}|ds3\d{3}'
+root:            # prefer a link containing these as the base (otherwise: the largest by volume)
+  - 'chassis|base|frame|body|hull'

@@ -33,7 +33,7 @@ from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.GProp import GProp_GProps
 from build123d import GeomType, Shape, import_step
 
-from .util import UnionFind, is_fastener
+from .util import UnionFind, is_fastener, part_is, set_part_classes
 
 
 UNIT_TO_M = {"mm": 1e-3, "cm": 1e-2, "m": 1.0, "in": 0.0254}
@@ -312,17 +312,6 @@ def infer_joints(
     return out
 
 
-ROOT_HINT = re.compile(r"chassis|base|frame|body|hull", re.I)
-# a bearing needs the name AND annular geometry (a "bearing plate" is a plate)
-BEARING_NAME = re.compile(r"bearing|(?<![a-z0-9])\d+x\d+x\d+(?![a-z0-9])|^mr\d+|^\d{4}(zz|rs|2rs)?$", re.I)
-# touching gears mesh rather than join
-GEAR_NAME = re.compile(r"(?<![a-z])\d+t(?![a-z])|gear|pinion|pulley|sprocket", re.I)
-# servo parts include their horn, so they touch both the mount and the driven part
-SERVO_NAME = re.compile(r"sts\d{4}|scs\d{2,4}|sm\d{2}bl|xl-?\d{3}|xm-?\d{3}|xh-?\d{3}|xc-?\d{3}|xw-?\d{3}|"
-                        r"ax-?1[28]|mx-?\d{2}|dynamixel|feetech|servo|lx-?\d{3}|mg9\d{2}|ds3\d{3}", re.I)
-# placeholder geometry, not physical parts
-IGNORE_HINT = re.compile(r"no.?blockage|keep.?out|zone|envelope|reference|clearance.?vol|dummy|placeholder", re.I)
-
 HORN_DOMINANCE = 0.6  # horn contacts weaker than this fraction of the strongest are grazes, not the output
 MAX_INCIDENTAL = 40  # a loop is broken only if its weakest contact has fewer overlapping faces than this
 LOOSE_PIVOT_MAX = 1.0e-3  # loosest hole a pin can still pivot in (printed linkages)
@@ -503,7 +492,7 @@ def _on_axis(part: Part, c: JointCandidate, scale: float) -> bool:
 
 def _link_name(parts: list, taken: set[str]) -> str:
     """Named after its largest part that isn't a fastener or bearing."""
-    real = [p for p in parts if not (is_fastener(p.name) or BEARING_NAME.search(p.name))]
+    real = [p for p in parts if not (is_fastener(p.name) or part_is("bearing", p.name))]
     main = max(real or parts, key=lambda p: p.volume)
     base = re.sub(r"[^a-z0-9]+", "_", main.name.split("#")[0].lower()).strip("_")[:24] or "link"
     if base[0].isdigit():
@@ -516,27 +505,29 @@ def _link_name(parts: list, taken: set[str]) -> str:
 
 
 def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
-               press_fit_tol: float = 0.005e-3, max_running_clearance: float = 0.15e-3) -> tuple[dict, list[str]]:
+               press_fit_tol: float = 0.005e-3, max_running_clearance: float = 0.15e-3,
+               part_classes: dict | str | None = None) -> tuple[dict, list[str]]:
+    classes = set_part_classes(part_classes)  # which parts are fasteners, bearings, servos...: spec data, not code
     scale = UNIT_TO_M[units]
     parts = load_parts(step_path)
-    ignored = [p.name for p in parts if IGNORE_HINT.search(p.name)]
+    ignored = [p.name for p in parts if part_is("ignore", p.name)]
     parts = [p for p in parts if p.name not in set(ignored)]
     for p in parts:
         p.link = p.name  # every part its own "link" for candidate search
         p.density = 1000.0
         mass_properties(p, scale)
     by_name = {p.name: p for p in parts}
-    rings = {p.name: r for p in parts if BEARING_NAME.search(p.name) and (r := _annulus(p, scale))}
+    rings = {p.name: r for p in parts if part_is("bearing", p.name) and (r := _annulus(p, scale))}
     cands = infer_joints(parts, scale, radial_tol=LOOSE_PIVOT_MAX)
     pivots, held = _loose_pivots(cands, press_fit_tol, max_running_clearance)
     running, forced_fixed = _classify_fits(cands, rings, press_fit_tol, max_running_clearance,
                                            pivots=pivots, held=held)
     running_pairs = {tuple(sorted((c.link_a, c.link_b))) for c in running}
-    gears = {p.name for p in parts if GEAR_NAME.search(p.name)}
+    gears = {p.name for p in parts if part_is("gear", p.name)}
     inner_of: dict[str, set[str]] = defaultdict(set)  # bearing/servo -> parts on its rotating side
     servos = {}
     for p in parts:
-        if SERVO_NAME.search(p.name) and (h := _servo_horn(p, scale)):
+        if part_is("servo", p.name) and (h := _servo_horn(p, scale)):
             servos[p.name] = (h, _horn_faces(p, h, scale))
             d, pt, discs, center, w = h
             rings[p.name] = (d, pt, discs[0][2], discs[0][2], center, w)  # same layout as a bearing
@@ -743,7 +734,7 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
 
     def root_score(rep):
         ps = groups[rep]
-        return (any(ROOT_HINT.search(p.name) for p in ps), sum(p.volume for p in ps))
+        return (any(part_is("root", p.name) for p in ps), sum(p.volume for p in ps))
 
     root = max(groups, key=root_score)
     edges = defaultdict(list)
@@ -795,6 +786,7 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
         "units": units,
         "materials": {"default": 1200},
         "part_materials": {"*": "default"},
+        **({"part_classes": classes} if classes else {}),
         **({"ignore_parts": sorted(ignored)} if ignored else {}),
         "links": links,
         "joints": joints,
@@ -849,7 +841,9 @@ def main(argv=None):
     ap.add_argument("step", type=Path)
     ap.add_argument("--spec", type=Path, help="group solids by this spec's links instead of by part name")
     ap.add_argument("--units", default="mm")
+    ap.add_argument("--part-classes", help="YAML of part-name patterns (see .agents/skills/cad2sim/part_classes.yaml)")
     args = ap.parse_args(argv)
+    set_part_classes(args.part_classes)
     scale = UNIT_TO_M[args.units]
     parts = load_parts(args.step)
     if args.spec:

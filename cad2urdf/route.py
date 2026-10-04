@@ -35,14 +35,22 @@ def deep_merge(base: dict, over: dict) -> dict:
 def build_spec(args, fe: FrontEnd, fin: Finish) -> tuple[dict, list[str]]:
     review: list[str] = []
     user = yaml.safe_load(Path(args.spec).read_text()) if args.spec else {}
+    classes = {}  # part-name classes: the library file, then the user's spec on top, per class
+    if args.part_classes:
+        classes.update(yaml.safe_load(Path(args.part_classes).read_text()) or {})
+    if isinstance(user.get("part_classes"), dict):
+        classes.update(user["part_classes"])
+    user.pop("part_classes", None)
     if fe.produces == "step":
         if user.get("links") and user.get("joints"):
             spec = dict(user)
             spec["source"] = os.path.abspath(args.input) if args.input else spec["source"]
+            if classes:
+                spec["part_classes"] = classes
         else:
             from .step import draft_spec, write_draft
 
-            spec, review = draft_spec(Path(args.input), units=user.get("units", "mm"))
+            spec, review = draft_spec(Path(args.input), units=user.get("units", "mm"), part_classes=classes)
             write_draft(spec, review, args.out / "robot_spec.draft.yaml")
             spec = deep_merge(spec, user)
     else:
@@ -50,6 +58,8 @@ def build_spec(args, fe: FrontEnd, fin: Finish) -> tuple[dict, list[str]]:
         src = src if src.startswith("http") else os.path.abspath(src)  # Onshape URL or exporter URDF
         spec = deep_merge({"source": src}, user)
         spec["source"] = src
+        if classes:
+            spec["part_classes"] = classes
     spec.setdefault("collision", {})
     spec["collision"].setdefault("default", fin.collision_default)
     spec.setdefault("actuators", {"default": {"kind": "position", "kp": 100.0, "kv": 5.0}})
@@ -68,6 +78,8 @@ def main(argv=None):
     ap.add_argument("--out", type=Path, default=Path("build/robot"))
     ap.add_argument("--spec", help="YAML overrides merged on top of the generated spec")
     ap.add_argument("--samples", type=int, default=2000, help="self-collision samples for the SRDF")
+    ap.add_argument("--part-classes", help="YAML of part-name patterns (fastener, bearing, servo, ...); the code "
+                    "classifies nothing by name without it. Default set: .agents/skills/cad2sim/part_classes.yaml")
     ap.add_argument("--no-validate", action="store_true")
     args = ap.parse_args(argv)
 

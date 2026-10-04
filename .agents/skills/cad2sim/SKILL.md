@@ -47,10 +47,23 @@ python -m cad2urdf.route --list          # full matrix
 
 ## 3. Run
 
+Always pass the part-class library. The code has no name knowledge of its own: without it nothing is dropped as a fastener and no bearing, servo or gear is recognised.
+
 ```bash
 python -m cad2urdf.route --cad <cad> --format <fmt> --sim <sim> --run \
-    --input <file|url> --out build/<robot> [--spec build/<robot>.overrides.yaml]
+    --input <file|url> --out build/<robot> \
+    --part-classes .agents/skills/cad2sim/part_classes.yaml [--spec build/<robot>.overrides.yaml]
 ```
+
+### Part classes (your job: what a part IS)
+
+`part_classes.yaml` holds regexes for `fastener`, `not_fastener`, `non_physical`, `ignore`, `bearing`, `gear`, `servo` and `root`. Treat it as a starting point, not as truth:
+1. Before running, skim the part names (`python -m cad2urdf.step <file> --part-classes <library>` for STEP, the assembly tree for Onshape).
+2. Where a name misleads, add a pattern to the `part_classes:` section of the overrides file. It is merged per class over the library. Examples: a vendor part number for a servo, `Hold-down clamp` as a fastener, `Cone bearing` as a bearing.
+3. Fasteners are dropped from visuals and collision (mass stays) and their mates never become joints. A part that only looks like a fastener but carries load, such as a lead screw, goes in `not_fastener`.
+4. After the run, confirm the REVIEW lines about bearings, servos and gears match what you know of the robot.
+
+The choice to treat something as a fastener, bearing or non-physical solid is yours to make and to record in the spec. It is never a reason to edit the code.
 
 Outputs in `--out`: `<robot>.urdf`, `.srdf`, `mjcf/`, `maniskill/`, `isaaclab/`, `gazebo/`, `meshes/`, `report.json` and `validation.json`. For STEP input it also writes `robot_spec.draft.yaml`.
 
@@ -100,7 +113,8 @@ Worked example: `examples/random_step/Haro380.spec.yaml`.
 
 Onshape mates the code handles on its own (do not re-decide them by hand):
 - Planar mates between the same two bodies are combined. One planar mate is two slides and a spin (passive); two with different plane normals are a single slide along the planes' intersection; three with independent normals are a rigid joint.
-- A screw, nut or washer mated with a slot, cylindrical or revolute mate is fixed to its part, never a joint. An explicitly named `dof_*` mate is the exception and is always honoured.
+- A part in the `fastener` class (see Part classes) mated with a slot, cylindrical or revolute mate is fixed to its part, never a joint. An explicitly named `dof_*` mate is the exception and is always honoured.
+- A mate to the assembly origin moves the body against the grounded part (or the first part of that sub-assembly); a REVIEW line names the stand-in.
 
 ### Trimming extra joints (your job, never the code's)
 
@@ -140,14 +154,16 @@ Report to the user:
 
 The same inputs must give byte-identical outputs: all sampling is seeded, ordering is sorted, and the router makes every decision that geometry or mates can settle. Your job is only what code cannot decide. Check that you stay on that side of the line:
 
-| Decide in the spec, from the user or the mechanism | Never decide by hand |
+| Decide in the spec, from the user or the mechanism | Never decide by hand: the code settles it from geometry or mates |
 |---|---|
-| joint limits, effort, velocity | joint axes and origins (take them from the inspector or mates) |
-| which joints are driven, passive or speed-controlled | which parts are fasteners, or which mates are rigid |
-| which generated joints are real mechanisms (fix the rest, as above) | which mates to weld, by editing the code |
+| joint limits, effort, velocity | joint axes and origins (take them from the inspector or the mates) |
+| which joints are driven, passive or speed-controlled | which mates are rigid; how several planar mates combine |
 | materials, measured masses | inertia, collision shapes, mesh decimation |
-| slide vs spin for a cylindrical fit; mimic and gear ratios | loop closures from `closing_*` mates |
-| what a placeholder limit (+/-pi, +/-0.1 m) should be | joint names the exporter produced |
+| which parts are fasteners, bearings, servos, gears or non-physical (`part_classes`) | which parts form links and joints (shaft/bore fits) |
+| which generated joints are real mechanisms (fix the rest, as above) | loop closures from `closing_*` mates |
+| slide vs spin for a cylindrical fit; mimic and gear ratios | joint names the exporter produced |
+| the up axis when a robot loads sideways (`root_rpy`) | self-collision matrix and SRDF excludes |
+| what a placeholder limit (+/-pi, +/-0.1 m) should be | which output files are written |
 
 Rules:
 - If two runs on the same input differ, that is a bug. Diff the output folders (`find . -type f | sort | xargs md5sum`) and report which file changed; do not paper over it in the spec.

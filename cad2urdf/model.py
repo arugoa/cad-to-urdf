@@ -13,6 +13,7 @@ import trimesh
 import yaml
 
 from .step import UNIT_TO_M, JointCandidate, Part, infer_joints, load_parts, mass_properties, tessellate
+from .util import set_part_classes
 
 
 DEFAULT_RGBA = {
@@ -227,6 +228,7 @@ def check_inertia(name: str, inertia: np.ndarray, mass: float) -> list[str]:
 def build(spec_path: Path) -> Robot:
     spec = yaml.safe_load(Path(spec_path).read_text())
     base = Path(spec_path).parent
+    set_part_classes(spec.get("part_classes"), base)  # always: clears the classes of a previous build
     if str(spec["source"]).startswith("http"):
         from .frontends import build_from_onshape
 
@@ -254,7 +256,9 @@ def build(spec_path: Path) -> Robot:
         raise ValueError(f"parts not assigned to any link: {unassigned}")
     for p in parts:
         p.link = link_of[p.name]
-        p.material = _match(p.name, spec["part_materials"]) or "aluminum"
+        p.material = _match(p.name, spec["part_materials"])
+        if p.material is None:
+            raise ValueError(f"part {p.name} matches no part_materials pattern (add a '*' fallback to the spec)")
         p.density = spec["materials"][p.material]
         mass_properties(p, scale)
         tessellate(p, scale, tess.get("linear_mm", 0.2), tess.get("angular_deg", 10))

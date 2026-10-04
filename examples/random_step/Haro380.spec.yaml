@@ -5,6 +5,7 @@ robot: haro380
 source: Haro380.step
 units: mm
 root_rpy: [1.5708, 0, 0]  # Y-up CAD (J1's axis is +Y) -> Z-up simulators
+part_classes: ../../.agents/skills/cad2sim/part_classes.yaml   # name patterns for fasteners, bearings, servos (the code has none built in)
 materials:
   pla: 1240
 part_materials:

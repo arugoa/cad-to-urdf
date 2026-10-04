@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import warnings
+from pathlib import Path
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -68,22 +69,39 @@ class UnionFind:
         self.p[self.find(a)] = self.find(b)
 
 
-FASTENER = re.compile(r"screw|bolt|nut(?![a-z])|washer|rivet|standoff|dowel|(threaded|heat.?set)[_ ]?insert|"
-                      r"(?<![a-z])(shcs|bhcs|fhcs|msb\d+|m\d+x\d)", re.I)
-NOT_FASTENER = re.compile(r"lead.?screw|ball.?screw|acme|trapezoidal|threaded.?rod|worm", re.I)  # drive screws
+# Part classes come from the spec's ``part_classes:`` (regexes per class); the code has no name knowledge of its
+# own. The agent skill ships the pattern library (.agents/skills/cad2sim/part_classes.yaml).
+PART_CLASSES = ("fastener", "not_fastener", "non_physical", "ignore", "bearing", "gear", "servo", "root")
+_classes: dict[str, list[re.Pattern]] = {k: [] for k in PART_CLASSES}
 
 
-# solids that visualise a field of view or keep-out volume: not hardware, so never links, mass or collision
-NON_PHYSICAL = re.compile(r"fov|frustum|(vision|view|sight)[_ ]?cone|keep[_ ]?out|ghost", re.I)
+def set_part_classes(spec_classes: dict | str | Path | None, base: Path | None = None) -> dict:
+    """Install the part classes for this run: a dict, a path to a YAML file of one, or None (nothing classified)."""
+    import yaml
+
+    if isinstance(spec_classes, (str, Path)):
+        path = Path(spec_classes)
+        spec_classes = yaml.safe_load((path if path.is_absolute() or base is None else base / path).read_text())
+    spec_classes = spec_classes or {}
+    unknown = sorted(set(spec_classes) - set(PART_CLASSES))
+    if unknown:
+        raise ValueError(f"unknown part_classes {unknown}; known: {list(PART_CLASSES)}")
+    for k in PART_CLASSES:
+        _classes[k] = [re.compile(p, re.I) for p in spec_classes.get(k, [])]
+    return {k: list(spec_classes.get(k, [])) for k in PART_CLASSES if spec_classes.get(k)}
 
 
-def is_non_physical(name: str) -> bool:
-    return bool(NON_PHYSICAL.search(name.split("/")[-1]))
+def part_is(kind: str, name: str) -> bool:
+    n = name.split("/")[-1]
+    return any(p.search(n) for p in _classes[kind])
 
 
 def is_fastener(name: str) -> bool:
-    n = name.split("/")[-1]
-    return bool(FASTENER.search(n)) and not NOT_FASTENER.search(n)
+    return part_is("fastener", name) and not part_is("not_fastener", name)
+
+
+def is_non_physical(name: str) -> bool:
+    return part_is("non_physical", name)
 
 
 _MARK = "CAD2URDF_SANDBOXED"

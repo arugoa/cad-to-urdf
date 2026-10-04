@@ -16,6 +16,7 @@ robot: arm4
 source: cad/arm4.step
 units: mm            # CAD length unit; outputs are SI (m, kg)
 
+part_classes: ../../.agents/skills/cad2sim/part_classes.yaml   # name patterns for fasteners, bearings, servos (the code has none built in)
 materials:           # density in kg/m^3
   aluminum: 2700
   steel: 7850

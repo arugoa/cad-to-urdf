@@ -82,6 +82,7 @@ def test_spec_closure_becomes_mjcf_connect(tmp_path):
 
     spec = yaml.safe_load((ARM4 / "robot_spec.yaml").read_text())
     spec["source"] = str((ARM4 / spec["source"]).resolve())
+    spec["part_classes"] = str((ARM4 / spec["part_classes"]).resolve())  # a copy elsewhere needs absolute paths
     spec["closures"] = {"finger_tie": {"link1": "finger_left", "link2": "gripper_base", "point": [0, 0, 400]}}
     (tmp_path / "spec.yaml").write_text(yaml.safe_dump(spec))
     r = model.build(tmp_path / "spec.yaml")
@@ -105,6 +106,7 @@ def test_root_rpy_reaches_the_urdf(tmp_path):
 
     spec = yaml.safe_load((ARM4 / "robot_spec.yaml").read_text())
     spec["source"] = str((ARM4 / spec["source"]).resolve())
+    spec["part_classes"] = str((ARM4 / spec["part_classes"]).resolve())  # a copy elsewhere needs absolute paths
     out = {}
     for tag, rpy in (("plain", None), ("rot", [np.pi / 2, 0, 0])):
         s = dict(spec, root_rpy=rpy) if rpy else spec

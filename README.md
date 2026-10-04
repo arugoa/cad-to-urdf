@@ -55,10 +55,11 @@ Two options:
 
 ```bash
 python -m cad2urdf.route --cad onshape --format native --sim maniskill --run \
-    --input "https://cad.onshape.com/documents/<doc>/w/<workspace>/e/<assembly>" --out build/myrobot
+    --input "https://cad.onshape.com/documents/<doc>/w/<workspace>/e/<assembly>" --out build/myrobot \
+    --part-classes .agents/skills/cad2sim/part_classes.yaml
 ```
 
-Naming conventions from onshape-to-robot are honoured: if any mate is named `dof_*`, only those mates are joints (`_inv` flips the axis); `closing_*` mates close loops; joints named `*passive*` get no actuator and `*_speed` a velocity actuator; `frame_*` parts are markers; planar mates become two slides and a spin, and a screw or nut mated to a part stays fixed to it. Responses are cached in `~/.cache/cad2urdf/onshape`.
+Naming conventions from onshape-to-robot are honoured: if any mate is named `dof_*`, only those mates are joints (`_inv` flips the axis); `closing_*` mates close loops; joints named `*passive*` get no actuator and `*_speed` a velocity actuator; `frame_*` parts are markers. Planar mates between the same two bodies are combined (one is two slides and a spin, two give a slide, three fix the part). A mate to the assembly origin moves the body against the grounded part. A part in the `fastener` class that is mated to something stays fixed to it. Responses are cached in `~/.cache/cad2urdf/onshape`.
 
 ## Usage
 
@@ -68,7 +69,8 @@ Outputs go to `build/`, which is git-ignored and can always be regenerated.
 python -m cad2urdf.route --cad onshape --format native --sim maniskill        # show the plan only
 
 python -m cad2urdf.route --cad solidworks --format step --sim maniskill --run \
-    --input robot.step --out build/robot [--spec overrides.yaml]              # STEP: spec drafted from geometry
+    --input robot.step --out build/robot [--spec overrides.yaml] \
+    --part-classes .agents/skills/cad2sim/part_classes.yaml                   # STEP: spec drafted from geometry
 
 python -m cad2urdf.route --cad fusion --format native --sim mujoco --run \
     --input exported/robot.urdf --out build/robot                             # an exporter's URDF
@@ -124,7 +126,8 @@ For STEP input the spec is drafted and every guess is marked `# REVIEW`. Pass co
 
 ```yaml
 materials: {aluminum: 2700, steel: 7850, pla: 1240}          # kg/m^3
-part_materials: {"*bolt*": steel, "*": aluminum}              # first match wins
+part_materials: {"*bolt*": steel, "*": aluminum}              # first match wins; a "*" fallback is required
+part_classes: {fastener: ['hold-down clamp'], servo: ['^st3215']}   # name regexes, merged per class over the library
 joints:
   base_to_turret: {limits: [-2.97, 2.97], effort: 40, velocity: 3}
   gripper_to_finger_2: {mimic: {joint: gripper_to_finger}, axis_sign: -1}
@@ -140,11 +143,15 @@ srdf: {group_states: {home: {group: arm, joints: {base_to_turret: 0}}}}
 
 When the draft can't find the joints (motors butted flat against a link, zero-clearance pivots), write the links and joints yourself with axes from `python -m cad2urdf.step`. [`examples/random_step/Haro380.spec.yaml`](examples/random_step/Haro380.spec.yaml) is a worked example.
 
+### Part classes
+
+The code has no built-in knowledge of part names. It treats a part as a fastener, bearing, gear, servo, non-physical solid or placeholder only if the spec's `part_classes:` lists a pattern for it. [`.agents/skills/cad2sim/part_classes.yaml`](.agents/skills/cad2sim/part_classes.yaml) is the default pattern library; pass it with `--part-classes`, and add or override classes per robot in the spec. Without it nothing is dropped as a fastener and no bearing, servo or gear is recognised. Fasteners are removed from visuals and collision (their mass stays) and their mates never become joints.
+
 Collision modes: `none`, `box`, `spheres`, `primitives`, `hull`, `auto` (default), `decompose`, `keep` (an input URDF's own collisions). Exporter URDFs also take `package_dirs` to resolve `package://` paths.
 
 ## Agent skill
 
-`.agents/skills/cad2sim/SKILL.md` (linked into `.claude/skills/`) lets Claude Code or Codex run a conversion end to end. The agent picks the route, runs it, resolves the REVIEW items (asking you for limits and materials), and iterates on `validation.json`. It only edits the spec, never the generated files.
+`.agents/skills/cad2sim/SKILL.md` (linked into `.claude/skills/`) lets Claude Code or Codex run a conversion end to end. The agent picks the route, runs it, resolves the REVIEW items (asking you for limits and materials), and iterates on `validation.json`. It only edits the spec, never the generated files. It also owns the judgment calls the code leaves out: which parts are fasteners or bearings (`part_classes`), and which generated joints to fix.
 
 ## Repository layout
 
@@ -159,6 +166,7 @@ cad2urdf/
   scene.py         static scenes and drop test
   validate.py, isaac_probe.py   simulator checks
   util.py          memory sandbox and shared helpers
+.agents/skills/cad2sim/   the agent skill: SKILL.md and part_classes.yaml (name patterns the code does not hold)
 examples/                 arm4 (parametric sample), sigmaban, random_step (Haro380, gripper, Ender 3, ...)
 tests/                    pytest suite and view_urdf.py
 docs/                     RESEARCH.md, ONSHAPE_API_KEYS.md
@@ -186,7 +194,8 @@ Tested on an RTX 3070 Ti laptop with Ubuntu 22.04.
 | Haro380 arm (STEP) | hand-finished spec: 6 joints and the gas-spring loop |
 | Ender 3 V2, Kaya base (STEP) | no joints: slides aren't detected; the Kaya file is one solid |
 | ARC 3v3 field (surface-only STEP) | 925 collision shapes; 0 of 400 drop-test balls fall through |
-| 1,000-part robots (TR hero, Infantry 2026) | drafts are wrong; use the Onshape route |
+| Triton Infantry 2026 (Onshape, 101 parts) | 62 links, 61 joints: wheels, yaw, pitch and flywheels from the real mates, plus extra bearing/collar joints for the agent to fix; the STEP draft of the same robot is wrong |
+| 1,000-part robots from STEP | drafts are unreliable; use the Onshape route |
 
 Checked simulators: MuJoCo (URDF and MJCF), PyBullet, SAPIEN, ManiSkill 3 (CPU and GPU), yourdfpy, Gazebo Classic 11 (headless) and Isaac Sim 6.1 (headless import and stepping).
 
@@ -194,5 +203,6 @@ Limitations:
 - STEP has no mates. Shaft/bore fits, loose pins, bearings, servo horns, gears and press fits are recognised; joints the CAD doesn't model come out rigid.
 - Joint limits and real masses aren't in STEP geometry; set them in the spec.
 - Loop closures reach the MJCF only; URDF-based simulators need them added by hand.
+- Which generated joints are real mechanisms, and which parts are fasteners or bearings, are judgment calls kept out of the code: the agent skill makes them (see [Agent skill](#agent-skill)).
 
 [docs/RESEARCH.md](docs/RESEARCH.md) has the survey of existing tools and how each simulator reads URDF, SRDF and dynamics.

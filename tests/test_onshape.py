@@ -262,7 +262,7 @@ class ScrewFakeClient(FakeClient):
         return super().get(path, params, binary)
 
 
-def test_screw_mates_are_fixed_not_joints():
+def test_screw_mates_are_fixed_not_joints(part_classes):
     r = frontends.build_from_onshape({"source": URL}, None, client=ScrewFakeClient())
     assert sorted(r.joints) == ["carriage_slide", "shoulder"]
     assert any("m3x8_shcs" in p.name for p in r.links["arm"].parts)
@@ -360,7 +360,7 @@ class OriginClient(FakeClient):
         return super().get(path, params, binary)
 
 
-def test_origin_mate_moves_the_body_against_the_ground_and_fov_solids_are_skipped():
+def test_origin_mate_moves_the_body_against_the_ground_and_fov_solids_are_skipped(part_classes):
     r = frontends.build_from_onshape({"source": URL}, None, client=OriginClient())
     yaw = r.joints["yaw"]
     assert (yaw.type, yaw.parent, yaw.child) == ("revolute", "base_link", "arm")  # limits come from the fake feature list
@@ -370,7 +370,7 @@ def test_origin_mate_moves_the_body_against_the_ground_and_fov_solids_are_skippe
     assert not any("lidarfov" in p.name for l in r.links.values() for p in l.parts)
 
 
-def test_non_physical_names():
+def test_non_physical_names(part_classes):
     from cad2urdf.util import is_non_physical
 
     for n in ("FOVCone <1>", "LidarFov <1>", "camera_frustum", "Vision Cone"):

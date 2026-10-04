@@ -7,7 +7,7 @@ from cad2urdf.geometry import fit_spheres
 from cad2urdf.util import is_fastener
 
 
-def test_fastener_names():
+def test_fastener_names(part_classes):
     for n in ["M3x8_SHCS", "Hex Nut M4", "washer_5mm", "ISO 4762 M3 x 10 Socket Head Cap Screw", "heat_set_insert",
               "base/BHCS_M2", "Standoff_20mm"]:
         assert is_fastener(n), n
@@ -56,7 +56,7 @@ def test_servo_dynamics_keep_light_links_stable_and_speed_limited():
     assert _servo_dynamics(passive, TIMESTEP) == (0.1, 0.001)
 
 
-def test_fastener_removal_with_several_distinct_parts():
+def test_fastener_removal_with_several_distinct_parts(part_classes):
     from cad2urdf.geometry import simplify_robot
     from cad2urdf.model import Link, Robot
     from cad2urdf.step import Part
@@ -99,3 +99,19 @@ def test_flat_plate_gets_a_box_not_a_degenerate_hull():
     assert g.kind == "box" and min(g.size) >= 0.002
     solid = _hull_geom(trimesh.creation.icosphere(radius=0.02), 64, "ball")
     assert solid.kind == "mesh"
+
+
+def test_nothing_is_classified_by_name_without_part_classes():
+    from cad2urdf import util
+
+    util.set_part_classes(None)
+    assert not util.is_fastener("M3x8_SHCS") and not util.is_non_physical("LidarFov") and not util.part_is("servo", "STS3215")
+    util.set_part_classes({"fastener": ["^zork"]})  # only what the spec says
+    try:
+        assert util.is_fastener("Zork 7") and not util.is_fastener("M3x8_SHCS")
+        import pytest
+
+        with pytest.raises(ValueError, match="unknown part_classes"):
+            util.set_part_classes({"fasteners": ["x"]})  # a typo is an error, not silently ignored
+    finally:
+        util.set_part_classes(None)
