@@ -37,7 +37,7 @@ from scipy.spatial.transform import Rotation
 
 from .model import CollisionGeom, Joint, Link, Robot, _per, check_inertia, combine_inertia
 from .step import Part
-from .util import UnionFind, is_fastener, is_non_physical, slug
+from .util import UnionFind, is_fastener, is_non_physical, part_is, slug
 
 
 def _pose(el: ET.Element | None) -> np.ndarray:
@@ -415,8 +415,8 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
                 named_rigid = any(re.search(p, inst["name"], re.I) for p in rigid_patterns)
                 walk(sub, path, rigid if rigid else (path if (named_rigid or not flexible) else None))
             elif inst["type"] == "Part":
-                if not inst.get("partId") or is_non_physical(inst["name"]):  # no mesh, or a FOV cone / keep-out solid
-                    continue
+                if not inst.get("partId") or is_non_physical(inst["name"]) or part_is("ignore", inst["name"]):
+                    continue  # no mesh, a FOV cone / keep-out solid, or placeholder geometry
                 bt = body_type.get((inst["documentId"], inst["elementId"], inst["partId"]), "solid")
                 if bt not in ("solid", "composite") or inst["id"] in frame_ids:
                     continue

@@ -351,6 +351,8 @@ class OriginClient(FakeClient):
             a = json.loads(json.dumps(ASSEMBLY))
             ra = a["rootAssembly"]
             ra["instances"].append(part("i_fov", "LidarFov", "JA"))
+            ra["instances"].append(part("i_zone", "NoBlockageZone", "JA"))
+            ra["occurrences"].append({"path": ["i_zone"], "transform": T((0, 0, 0.6))})
             ra["occurrences"].append({"path": ["i_fov"], "transform": T((0, 0, 0.5))})
             ra["features"][1] = {"id": "f2", "featureType": "mate", "suppressed": False, "featureData": {
                 "name": "Yaw", "mateType": "REVOLUTE", "matedEntities": [
@@ -367,7 +369,7 @@ def test_origin_mate_moves_the_body_against_the_ground_and_fov_solids_are_skippe
     np.testing.assert_allclose(yaw.axis, [0, 0, 1], atol=1e-12)
     np.testing.assert_allclose(yaw.origin, [0, 0, 0.30], atol=1e-12)  # where the origin frame and the arm frame meet
     assert any("stands in for it" in x for x in r.review)
-    assert not any("lidarfov" in p.name for l in r.links.values() for p in l.parts)
+    assert not any(k in p.name for l in r.links.values() for p in l.parts for k in ("lidarfov", "noblockagezone"))
 
 
 def test_non_physical_names(part_classes):
