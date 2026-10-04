@@ -1,4 +1,5 @@
 # Haro380 arm, spec written by hand: the draft can't see its joint modules (no shaft/bore fits).
+# The STEP file is a WLKATA product and is not included; put your own copy next to this file.
 # Links follow the part names; axis/origin (mm) come from `python -m cad2urdf.step Haro380.step`.
 # Limits are placeholders.
 robot: haro380

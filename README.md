@@ -14,7 +14,7 @@ Everything is deterministic: the same inputs give the same outputs. What geometr
 
 ## Demos
 
-Each clip shows the visual meshes (left) and the generated collision shapes (right) while every joint sweeps inside its limits. All 17 are in [`docs/demos/`](docs/demos).
+Each clip shows the visual meshes (left) and the generated collision shapes (right) while every joint sweeps inside its limits. All 14 are in [`docs/demos/`](docs/demos); credits are in [THIRD_PARTY.md](THIRD_PARTY.md).
 
 | | |
 |---|---|
@@ -152,7 +152,7 @@ closures:                                                     # loops a URDF tre
 srdf: {group_states: {home: {group: arm, joints: {base_to_turret: 0}}}}
 ```
 
-When the draft can't find the joints (motors butted flat against a link, zero-clearance pivots), write the links and joints yourself with axes from `python -m cad2urdf.step`. [`examples/random_step/Haro380.spec.yaml`](examples/random_step/Haro380.spec.yaml) is a worked example.
+When the draft can't find the joints (motors butted flat against a link, zero-clearance pivots), write the links and joints yourself with axes from `python -m cad2urdf.step`. [`examples/step/Haro380.spec.yaml`](examples/step/Haro380.spec.yaml) is a worked example (it needs your own copy of the Haro380 STEP file).
 
 ### Part classes
 
@@ -178,7 +178,7 @@ cad2urdf/
   validate.py, isaac_probe.py   simulator checks
   util.py          memory sandbox and shared helpers
 .agents/skills/cad2sim/   the agent skill: SKILL.md and part_classes.yaml (name patterns the code does not hold)
-examples/                 arm4 (parametric sample), sigmaban, random_step (Haro380, gripper, Ender 3, ...)
+examples/                 arm4 (parametric sample), sigmaban, step (Kaya base, a Haro380 spec)
 tests/                    pytest suite and view_urdf.py
 docs/                     RESEARCH.md, ONSHAPE_API_KEYS.md
 scripts/                  setup_venv.sh, run_safely.sh
@@ -201,9 +201,8 @@ Tested on an RTX 3070 Ti laptop with Ubuntu 22.04.
 | 7 public Onshape robots | joint counts match the references: 2-wheeler 2, adjustable arm 4, quadruped 12, dog 12, Sigmaban 20, Orbita 7 (+2 loop closures), RSK soccer 64 |
 | Open Duck Mini v2 (Onshape) | 14 joints; runs in MuJoCo and PyBullet |
 | SO-100 arm (STEP) | drafted automatically: 7 links, 6 joints |
-| Printed parallel gripper (STEP) | 5 links, 4 pivots; the four-bar loops are reported |
-| Haro380 arm (STEP) | hand-finished spec: 6 joints and the gas-spring loop |
-| Ender 3 V2, Kaya base (STEP) | no joints: slides aren't detected; the Kaya file is one solid |
+| Haro380 arm, printed parallel gripper, Ender 3 V2 (STEP, tested locally, not bundled) | Haro380: hand-finished spec with 6 joints and the gas-spring loop; gripper: 5 links, 4 pivots, four-bar loops reported; Ender 3: no joints (slides aren't detected) |
+| Kaya base (STEP) | one solid, no joints |
 | ARC 3v3 field (surface-only STEP) | 925 collision shapes; 0 of 400 drop-test balls fall through |
 | Triton Infantry 2026 (Onshape, 101 parts) | 62 links, 61 joints: wheels, yaw, pitch and flywheels from the real mates, plus extra bearing/collar joints for the agent to fix; the STEP draft of the same robot is wrong |
 | 1,000-part robots from STEP | drafts are unreliable; use the Onshape route |
@@ -217,3 +216,7 @@ Limitations:
 - Which generated joints are real mechanisms, and which parts are fasteners or bearings, are judgment calls kept out of the code: the agent skill makes them (see [Agent skill](#agent-skill)).
 
 [docs/RESEARCH.md](docs/RESEARCH.md) has the survey of existing tools and how each simulator reads URDF, SRDF and dynamics.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Bundled and demonstrated third-party models keep their own licenses: see [THIRD_PARTY.md](THIRD_PARTY.md).
