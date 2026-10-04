@@ -270,7 +270,7 @@ def build(spec_path: Path) -> Robot:
     joints = {}
     for jname, js in spec["joints"].items():
         pair = sorted((js["parent"], js["child"]))
-        cand = next((c for c in candidates if [c.link_a, c.link_b] == pair), None)
+        cand = next((c for c in candidates if sorted((c.link_a, c.link_b)) == pair), None)  # either order
         axis = np.array(js["axis"], float) if isinstance(js.get("axis"), list) else None
         origin = np.array(js["origin"], float) * scale if isinstance(js.get("origin"), list) else None
         if axis is None or origin is None:

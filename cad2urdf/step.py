@@ -776,6 +776,9 @@ def draft_spec(step_path: Path, units: str = "mm", touch_tol: float = 0.05e-3,
                      "effort": 50.0, "velocity": 0.5}
                 review.append(f"joints.{jname}: cylindrical fit (slide OR spin) drafted as prismatic; "
                               f"limits = +/- half the free shaft ({half} m)")
+            scale = UNIT_TO_M[units]
+            j["axis"] = [round(float(x), 6) for x in c.direction]  # explicit, so the compile never re-infers it
+            j["origin"] = [round(float(x) / scale, 4) for x in c.origin]  # CAD units
             joints[jname] = j
     orphans = [comp_name[r] for r in groups if r not in seen]
     links = {comp_name[r]: sorted(p.name for p in ps) for r, ps in groups.items() if r in seen}

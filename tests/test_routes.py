@@ -33,6 +33,9 @@ def test_draft_recovers_arm4_structure():
     types = sorted(j["type"] for j in spec["joints"].values())
     assert types == ["prismatic"] * 2 + ["revolute"] * 4
     assert any("cylindrical" in r for r in review)
+    for name, j in spec["joints"].items():  # every drafted joint carries its own axis and origin
+        assert len(j["axis"]) == 3 and abs(sum(x * x for x in j["axis"]) - 1) < 1e-4, name
+        assert len(j["origin"]) == 3, name
 
 
 def test_urdf_round_trip_preserves_kinematics(tmp_path):
