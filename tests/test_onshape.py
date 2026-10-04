@@ -398,3 +398,10 @@ def test_single_entity_revolute_is_a_joint_against_the_ground(part_classes):
     assert (yaw.parent, yaw.child) == ("base_link", "arm")
     np.testing.assert_allclose(yaw.axis, [0, 0, 1], atol=1e-12)
     np.testing.assert_allclose(yaw.origin, [0, 0, 0.30], atol=1e-12)  # the listed entity's own frame
+
+
+def test_planar_chain_pieces_accept_a_fixed_override():
+    spec = {"source": URL, "joints": {f"carriage_slide_{k}": {"type": "fixed"} for k in "xyz"}}
+    r = frontends.build_from_onshape(spec, None, client=PlanarFakeClient())
+    assert [r.joints[f"carriage_slide_{k}"].type for k in "xyz"] == ["fixed"] * 3
+    assert [j.name for j in r.moving_joints()] == ["shoulder"]

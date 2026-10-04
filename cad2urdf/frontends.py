@@ -568,7 +568,7 @@ def _planar_joints(m: Mate, F: list, c: int, jname: str, parent: str, child: str
             links[end] = Link(end)
             links[end].origin = origin.copy()
         j_ov = ov.get(name, {})
-        joints[name] = Joint(name=name, type=kind, parent=prev, child=end, origin=origin.copy(), axis=axis,
+        joints[name] = Joint(name=name, type=j_ov.get("type", kind), parent=prev, child=end, origin=origin.copy(), axis=axis,
                              lower=j_ov.get("limits", [lo, hi])[0], upper=j_ov.get("limits", [lo, hi])[1],
                              effort=j_ov.get("effort", 10.0), velocity=j_ov.get("velocity", 5.0),
                              actuator=dict((spec.get("actuators", {}) or {}).get(name, {"kind": "none"})))
