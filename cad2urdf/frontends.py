@@ -311,6 +311,7 @@ class Mate:
     cs: list[np.ndarray]  # two 4x4 mate frames in their occurrence's frame
     limits: tuple[float, float] | None = None
     planar_limits: dict | None = None  # PLANAR: {"x": (lo, hi), "y": ..., "z": ...} (z is the rotation)
+    axis_world: np.ndarray | None = None  # overrides the mate frame's z as the joint axis (planar pairs -> slide)
     relations: list = field(default_factory=list)
 
 
@@ -478,6 +479,48 @@ def _mesh_and_mass(client: Client, occ: Occ, density: float, top_did: str | None
 
 
 
+def _resolve_planar(planar: list, uf: UnionFind, rep, occ_T: dict, review: list) -> list:
+    """Planar mates between the same two bodies, taken together.
+
+    One planar mate leaves 3 DOF (two slides and a spin). Each extra mate with a different plane normal removes
+    more: two leave a slide along the planes' intersection, three independent ones are a rigid joint (a common
+    way to fix a part). Returns the mates to treat as joints; rigid pairs are welded into ``uf``.
+    """
+    from collections import defaultdict
+    from dataclasses import replace
+
+    out: list = []
+    pending = list(planar)
+    while pending:
+        by_pair: dict = defaultdict(list)
+        for m in pending:
+            a, b = uf.find(rep(m.occ[0])), uf.find(rep(m.occ[1]))
+            if a != b:
+                by_pair[tuple(sorted((a, b), key=str))].append(m)
+        pending, welded = [], False
+        for ms in by_pair.values():
+            normals = np.array([(occ_T[m.occ[0]] @ m.cs[0])[:3, 2] for m in ms])
+            rank = int((np.linalg.svd(normals / np.linalg.norm(normals, axis=1, keepdims=True),
+                                      compute_uv=False) > 0.05).sum())
+            first = ms[0]
+            if rank >= 3:
+                uf.union(rep(first.occ[0]), rep(first.occ[1]))
+                welded = True
+                review.append(f"{len(ms)} planar mates ({', '.join(m.name for m in ms[:3])}) with independent "
+                              f"normals fix {first.name}'s two bodies together: welded")
+            elif rank == 2:
+                n = np.cross(*[v for v in normals[[0, int(np.argmax(np.abs(normals @ normals[0]) < 0.95))]]])
+                out.append(replace(first, type="SLIDER", axis_world=n / np.linalg.norm(n), limits=None))
+                review.append(f"{len(ms)} planar mates ({', '.join(m.name for m in ms[:3])}) leave one slide along "
+                              f"their planes' intersection: prismatic")
+            else:
+                out.append(first)  # parallel planes: one planar mate's worth of freedom
+        if welded:  # welding changes which bodies are the same: re-evaluate the rest
+            pending = [m for ms in by_pair.values() for m in ms]
+            out = []
+    return out
+
+
 def _planar_joints(m: Mate, F: list, c: int, jname: str, parent: str, child: str, spec: dict,
                    review: list) -> tuple[dict, dict]:
     """A PLANAR mate (slide x, slide y, spin z in the mate frame) as a chain: parent -x-> dummy -y-> dummy -z-> child.
@@ -606,7 +649,7 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
         leaves = [rep(p) for p in grp if leaves_under(p)]
         for a in leaves[1:]:
             uf.union(leaves[0], a)
-    moving, closing = [], []
+    moving, closing, planar = [], [], []
     for m in mates:
         a, b = rep(m.occ[0]), rep(m.occ[1])
         if m.name.lower().startswith("closing_") and m.type in ("REVOLUTE", "SLIDER", "CYLINDRICAL", "PIN_SLOT",
@@ -624,12 +667,16 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             continue
         if m.type == "FASTENED":
             uf.union(a, b)
-        elif m.type in ("REVOLUTE", "SLIDER", "CYLINDRICAL", "PIN_SLOT", "PLANAR"):
+        elif m.type == "PLANAR":
+            planar.append(m)
+        elif m.type in ("REVOLUTE", "SLIDER", "CYLINDRICAL", "PIN_SLOT"):
             moving.append(m)
             if m.type in ("CYLINDRICAL", "PIN_SLOT"):
                 review.append(f"mate {m.name}: {m.type} (rotates AND slides) exported as revolute")
         else:
             review.append(f"mate {m.name}: {m.type} not supported as a joint; ignored")
+
+    moving += _resolve_planar(planar, uf, rep, occ_T, review)
 
     groups: dict = {}
     for p in occs:
@@ -702,7 +749,7 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             pg, m, side = parent_of[g]
             c = 1 - side  # index of this (child) side in the mate
             F = [occ_T[m.occ[k]] @ m.cs[k] for k in (0, 1)]  # both mate frames in world
-            axis_w = F[0][:3, 2]
+            axis_w = F[0][:3, 2] if m.axis_world is None else m.axis_world
             raw = m.name[4:] if m.name.lower().startswith("dof_") else m.name
             flip = raw.lower().endswith("_inv")
             jname = slug(raw[:-4] if flip else raw, lower=True)

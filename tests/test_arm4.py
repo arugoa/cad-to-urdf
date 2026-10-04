@@ -110,3 +110,11 @@ def test_bad_part_inertia_does_not_crash_the_link():
     assert mass == 1.0 and np.isfinite(inertia).all()  # the unusable part is ignored
     assert model.combine_inertia([nan], np.zeros(3))[0] == 0.0
     assert model.check_inertia("x", np.full((3, 3), np.nan), 1.0)  # reported, not raised
+
+
+def test_collision_metrics_repeat_exactly(robot):
+    link = next(iter(robot.links.values()))
+    geometry.build_collisions(robot, with_metrics=False)
+    first = geometry.metrics(link)
+    np.random.seed(123)  # whatever the global RNG state is, the result must not change
+    assert geometry.metrics(link) == first

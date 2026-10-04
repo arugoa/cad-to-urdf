@@ -135,7 +135,7 @@ def fit_spheres(mesh: trimesh.Trimesh, max_spheres: int = 24, resolution: int = 
     pitch = float(max(mesh.extents)) / resolution
     try:
         pts = mesh.voxelized(pitch).fill().points
-        pts = pts[mesh.contains(pts)] if len(pts) > 64 else pts
+        pts = pts[_contains(mesh, pts)] if len(pts) > 64 else pts
     except Exception:  # noqa: BLE001
         pts = np.zeros((0, 3))
     if len(pts) == 0:
@@ -362,10 +362,10 @@ def metrics(link: Link, n: int = 60000, seed: int = 0) -> dict:
     pts = rng.uniform(lo, hi, size=(n, 3))
     in_cad = np.zeros(n, bool)
     for m in part_meshes:
-        in_cad |= m.contains(pts)
+        in_cad |= _contains(m, pts)
     in_col = np.zeros(n, bool)
     for m in coll:
-        in_col |= m.contains(pts)
+        in_col |= _contains(m, pts)
     inter, union = (in_cad & in_col).sum(), (in_cad | in_col).sum()
     verts = [len(m.vertices) for m in coll if m is not None]
     return {
@@ -438,6 +438,16 @@ def _manifold(mesh: trimesh.Trimesh):
     m = mf.Manifold(mf.Mesh(vert_properties=np.asarray(mesh.vertices, np.float32),
                             tri_verts=np.asarray(mesh.faces, np.uint32)))
     return None if m.is_empty() else m
+
+
+def _contains(mesh: trimesh.Trimesh, pts: np.ndarray) -> np.ndarray:
+    """``mesh.contains`` with trimesh's ambiguous-ray retries (numpy's global RNG) seeded, so results repeat."""
+    state = np.random.get_state()
+    np.random.seed(0)
+    try:
+        return mesh.contains(pts)
+    finally:
+        np.random.set_state(state)
 
 
 SWEEP_FACES = 150_000  # per link: the sweep unions the largest parts up to this many triangles

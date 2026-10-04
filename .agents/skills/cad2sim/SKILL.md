@@ -98,6 +98,10 @@ To write the spec:
 
 Worked example: `examples/random_step/Haro380.spec.yaml`.
 
+Onshape mates the code handles on its own (do not re-decide them by hand):
+- Planar mates between the same two bodies are combined. One planar mate is two slides and a spin (passive); two with different plane normals are a single slide along the planes' intersection; three with independent normals are a rigid joint.
+- A screw, nut or washer mated with a slot, cylindrical or revolute mate is fixed to its part, never a joint. An explicitly named `dof_*` mate is the exception and is always honoured.
+
 Onshape loops: mates named `closing_*` are loop closures (MJCF `<equality connect>`). Joints inside the loop become passive; only joints on the base keep motors. If a parallel mechanism's loop isn't closed in Onshape, ask the user to rename the closing mate `closing_<name>`.
 
 ## 5. Read validation.json and iterate
@@ -116,6 +120,23 @@ Report to the user:
 2. which REVIEW items you resolved and how;
 3. the validation lines for the target simulator;
 4. anything you could not verify (Isaac Lab and Gazebo need their own installs).
+
+## Determinism
+
+The same inputs must give byte-identical outputs: all sampling is seeded, ordering is sorted, and the router makes every decision that geometry or mates can settle. Your job is only what code cannot decide. Check that you stay on that side of the line:
+
+| Decide in the spec, from the user or the mechanism | Never decide by hand |
+|---|---|
+| joint limits, effort, velocity | joint axes and origins (take them from the inspector or mates) |
+| which joints are driven, passive or speed-controlled | which parts are fasteners, or which mates are rigid |
+| materials, measured masses | inertia, collision shapes, mesh decimation |
+| slide vs spin for a cylindrical fit; mimic and gear ratios | loop closures from `closing_*` mates |
+| what a placeholder limit (+/-pi, +/-0.1 m) should be | joint names the exporter produced |
+
+Rules:
+- If two runs on the same input differ, that is a bug. Diff the output folders (`find . -type f | sort | xargs md5sum`) and report which file changed; do not paper over it in the spec.
+- If you find yourself applying the same manual fix to a second robot, the fix belongs in the code as a rule with a test. Say so to the user instead of repeating it.
+- Anything not settled by a rule goes in the spec as an explicit value, so the next run reproduces it.
 
 ## Out of scope
 

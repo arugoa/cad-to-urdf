@@ -288,3 +288,46 @@ def test_planar_chain_loads_and_moves_in_mujoco(tmp_path):
     mujoco.mj_kinematics(m, d)
     # the planar axes are the mate's x and y; the arm is rotated none at q=0, so the carriage slides in world x, y
     np.testing.assert_allclose(d.body("carriage").xpos - start, [-0.03, -0.02, 0.0], atol=1e-9)
+
+
+class PlanarPairClient(FakeClient):
+    """The arm is attached to the post by planar mates with the given face normals (no shoulder mate)."""
+
+    normals: list = []
+
+    def get(self, path, params=None, binary=False):
+        if path.endswith("/features"):
+            return {"features": []}
+        if "/assemblies/" in path:
+            a = json.loads(json.dumps(ASSEMBLY))
+            feats = [a["rootAssembly"]["features"][0], a["rootAssembly"]["features"][2]]
+            for i, n in enumerate(self.normals):
+                x = (0, 1, 0) if abs(n[0]) > 0.9 else (1, 0, 0)
+                feats.append(mate(f"p{i}", f"Planar {i + 1}", "PLANAR", ["i_post"], cs((0, 0, 0.25), z=n, x=x),
+                                  ["i_arm"], cs((0, 0, 0), z=n, x=x)))
+            a["rootAssembly"]["features"] = feats
+            return a
+        return super().get(path, params, binary)
+
+
+class ThreePlanar(PlanarPairClient):
+    normals = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
+
+
+class TwoPlanar(PlanarPairClient):
+    normals = [(0, 1, 0), (0, 0, 1)]
+
+
+def test_three_planar_mates_are_a_rigid_joint():
+    r = frontends.build_from_onshape({"source": URL}, None, client=ThreePlanar())
+    assert sorted(r.joints) == ["carriage_slide"]  # the arm is welded to the base, not 3 free DOF
+    assert any("arm" in p.name for p in r.links["base_link"].parts)
+    assert any("independent normals" in x for x in r.review)
+
+
+def test_two_planar_mates_leave_one_slide():
+    r = frontends.build_from_onshape({"source": URL}, None, client=TwoPlanar())
+    j = r.joints["planar_1"]
+    assert j.type == "prismatic" and (j.parent, j.child) == ("base_link", "arm")
+    np.testing.assert_allclose(np.abs(j.axis), [1, 0, 0], atol=1e-9)  # the planes' intersection line
+    assert not any(n.startswith("planar_1_") for n in r.joints)

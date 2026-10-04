@@ -375,7 +375,7 @@ def collision_matrix(robot: Robot, mesh_dir: Path, samples: int = 5000, seed: in
             result[pair] = "Always"
         elif counts[pair] == 0:
             result[pair] = "Never"
-    stats = {"samples": samples, "pairs_seen_colliding": {f"{a}|{b}": n for (a, b), n in counts.items()}}
+    stats = {"samples": samples, "pairs_seen_colliding": {f"{a}|{b}": n for (a, b), n in sorted(counts.items())}}
     return result, stats
 
 
