@@ -102,6 +102,21 @@ Onshape mates the code handles on its own (do not re-decide them by hand):
 - Planar mates between the same two bodies are combined. One planar mate is two slides and a spin (passive); two with different plane normals are a single slide along the planes' intersection; three with independent normals are a rigid joint.
 - A screw, nut or washer mated with a slot, cylindrical or revolute mate is fixed to its part, never a joint. An explicitly named `dof_*` mate is the exception and is always honoured.
 
+### Trimming extra joints (your job, never the code's)
+
+Mates and shaft fits also produce joints that are not mechanisms: bearings, shaft collars, pulleys, screws, a part that merely rides a shaft. Which joints matter is a semantic call, so decide it yourself with the user and do it in the spec. Do not add a keep-list option to the code, and do not edit generated files.
+
+1. List what was generated: `grep -E '<joint |<parent|<child|<axis' <robot>.urdf`. Note each joint's name, parent, child, type and axis.
+2. Decide which joints are real. If the user names the joints that work, those are the keep list. Otherwise judge from the names, the child's mass, and the mechanism: wheels, yaw and pitch, flywheels, arm joints, grippers and slides are real; bearing, collar, spacer, pulley and fastener joints are not. A planar chain (`<name>_x`, `_y`, `_z`) is one mechanism: keep or fix all three. If unsure, ask the user instead of guessing.
+3. Write every other joint into the overrides file as fixed. The same entry works for Onshape, STEP and exporter-URDF input:
+   ```yaml
+   joints:
+     bearing_center_1_cylindrical_2: {type: fixed}
+     shaft_collar_1_planar_1_x: {type: fixed}
+   ```
+4. Re-run with `--spec`. Fixed joints stay in the URDF as `type="fixed"` (simulators merge them) and are dropped from the MJCF, actuators, SRDF groups and Isaac Lab / ManiSkill files.
+5. Check: the number of non-fixed joints in the URDF equals your keep list, `validation.json` still passes, and nothing that should move got fixed. Tell the user which joints you fixed and why, so they can correct you.
+
 Onshape loops: mates named `closing_*` are loop closures (MJCF `<equality connect>`). Joints inside the loop become passive; only joints on the base keep motors. If a parallel mechanism's loop isn't closed in Onshape, ask the user to rename the closing mate `closing_<name>`.
 
 ## 5. Read validation.json and iterate
@@ -129,6 +144,7 @@ The same inputs must give byte-identical outputs: all sampling is seeded, orderi
 |---|---|
 | joint limits, effort, velocity | joint axes and origins (take them from the inspector or mates) |
 | which joints are driven, passive or speed-controlled | which parts are fasteners, or which mates are rigid |
+| which generated joints are real mechanisms (fix the rest, as above) | which mates to weld, by editing the code |
 | materials, measured masses | inertia, collision shapes, mesh decimation |
 | slide vs spin for a cylindrical fit; mimic and gear ratios | loop closures from `closing_*` mates |
 | what a placeholder limit (+/-pi, +/-0.1 m) should be | joint names the exporter produced |
