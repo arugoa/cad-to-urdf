@@ -377,3 +377,22 @@ def test_non_physical_names(part_classes):
         assert is_non_physical(n), n
     for n in ("Referee Mount", "Cone Bearing", "Shaft", "Safety Cover"):
         assert not is_non_physical(n), n
+
+
+class OneEntityClient(OriginClient):
+    """The same yaw, but the API lists only one mated entity (the origin side is implicit)."""
+
+    def get(self, path, params=None, binary=False):
+        a = super().get(path, params, binary)
+        if "/assemblies/" in path and not path.endswith("/features"):
+            ents = a["rootAssembly"]["features"][1]["featureData"]["matedEntities"]
+            a["rootAssembly"]["features"][1]["featureData"]["matedEntities"] = ents[:1]
+        return a
+
+
+def test_single_entity_revolute_is_a_joint_against_the_ground(part_classes):
+    r = frontends.build_from_onshape({"source": URL}, None, client=OneEntityClient())
+    yaw = r.joints["yaw"]
+    assert (yaw.parent, yaw.child) == ("base_link", "arm")
+    np.testing.assert_allclose(yaw.axis, [0, 0, 1], atol=1e-12)
+    np.testing.assert_allclose(yaw.origin, [0, 0, 0.30], atol=1e-12)  # the listed entity's own frame

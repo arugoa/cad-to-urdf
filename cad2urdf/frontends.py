@@ -313,6 +313,7 @@ class Mate:
     planar_limits: dict | None = None  # PLANAR: {"x": (lo, hi), "y": ..., "z": ...} (z is the rotation)
     axis_world: np.ndarray | None = None  # overrides the mate frame's z as the joint axis (planar pairs -> slide)
     origin_prefix: tuple = ()  # the (sub-)assembly whose origin a one-sided mate refers to
+    coincident: bool = False  # one entity listed: the other frame is the origin, coincident with it (mate satisfied)
     world_cs: dict = field(default_factory=dict)  # entity index -> world frame, for the origin side
 
     def frame(self, k: int, occ_T: dict) -> np.ndarray:
@@ -430,9 +431,14 @@ def read_assembly(client: Client, ref: dict, flexible: bool = True, rigid_patter
             d = f["featureData"]
             if f["featureType"] == "mate":
                 ents = d["matedEntities"]  # an empty occurrence path is the (sub-)assembly origin: kept as None
-                mates.append(Mate(d.get("name", f["id"]), f["id"], d["mateType"],
-                                  [prefix + tuple(e["matedOccurrence"]) if e.get("matedOccurrence") else None
-                                   for e in ents], [_cs(e["matedCS"]) for e in ents], origin_prefix=prefix))
+                occ = [prefix + tuple(e["matedOccurrence"]) if e.get("matedOccurrence") else None for e in ents]
+                frames = [_cs(e["matedCS"]) for e in ents]
+                one = len(ents) == 1  # the API omits the origin entity: the other side is the origin
+                if one:
+                    occ.append(None)
+                    frames.append(frames[0])
+                mates.append(Mate(d.get("name", f["id"]), f["id"], d["mateType"], occ, frames,
+                                  origin_prefix=prefix, coincident=one))
             elif f["featureType"] == "mateRelation":
                 relations.append({**d, "prefix": prefix})
             elif f["featureType"] == "mateGroup":
@@ -647,7 +653,8 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             if anchor is None or m.type not in ("REVOLUTE", "SLIDER", "CYLINDRICAL", "PIN_SLOT", "PLANAR"):
                 review.append(f"mate {m.name}: mated to the origin ({m.type}); ignored")
                 continue
-            m.world_cs[k] = occ_T.get(m.origin_prefix, np.eye(4)) @ m.cs[k]
+            m.world_cs[k] = (occ_T[body] @ m.cs[1 - k] if m.coincident
+                             else occ_T.get(m.origin_prefix, np.eye(4)) @ m.cs[k])
             m.occ[k] = anchor
             review.append(f"mate {m.name}: mated to the assembly origin; {occs[anchor].name} stands in for it")
         if len(m.occ) < 2:
