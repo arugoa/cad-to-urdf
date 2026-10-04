@@ -25,20 +25,13 @@ Each clip shows the visual meshes (left) and the generated collision shapes (rig
 
 ## How it works
 
-You pick the CAD package, the export format and the simulator:
+![cad2urdf pipeline: CAD and export format, the compiler, output and validation, driven by a YAML spec](docs/img/pipeline.svg)
 
-```
- CAD / format          front end                    compiler                        validate
- onshape/native        Onshape REST API (mates)     links, inertia, collision,      MuJoCo, PyBullet,
- onshape/urdf-export   Onshape URDF export          SRDF, URDF, MJCF, ManiSkill,    SAPIEN, ManiSkill,
- solidworks/native     sw2robot (in SolidWorks)     Isaac Lab, Gazebo files         Gazebo, Isaac Sim
- fusion/native         ACDC4Robot (in Fusion)
- creo/native           creo2urdf (in Creo)
- */step                joints inferred from geometry, spec drafted
- urdf/native           any existing URDF
-```
+1. **Pick a route:** the CAD package, how it is exported, and the target simulator. A front end that reads real mates is preferred, because mates say what moves. STEP keeps the shapes but not the mates, so joints are inferred from geometry.
+2. **One compiler:** every route ends in the same deterministic compiler. It builds links, joints and inertia, fits collision shapes, samples a self-collision matrix, and writes URDF, SRDF, MJCF and the simulator files.
+3. **A spec you control:** the compiler is driven by a small YAML spec, drafted for you from the geometry. Limits, materials, part classes and which joints to fix go there, set by you or by the [`cad2sim` agent skill](#agent-skill).
 
-A front end that reads real mates is preferred, since mates say what moves. STEP keeps the shapes but not the mates, so joints are inferred from geometry. Every route ends in the same compiler. `python -m cad2urdf.route --list` prints the full matrix; [docs/RESEARCH.md §9](docs/RESEARCH.md#9-routing-cad--format--simulator) explains the choices.
+`python -m cad2urdf.route --list` prints the full route matrix; [docs/RESEARCH.md §9](docs/RESEARCH.md#9-routing-cad--format--simulator) explains the choices.
 
 ## Setup
 

@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 452" width="1000" height="452" role="img" aria-labelledby="t d" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="t">cad2urdf pipeline</title>
+  <desc id="d">A CAD package and export format go into one deterministic compiler, which writes URDF, SRDF, MJCF and simulator files that are validated in six simulators. A YAML spec drives the compiler.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#57606a"/>
+    </marker>
+    <style>
+      .box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.5; }
+      .head { fill: #0969da; }
+      .headc { fill: #0550ae; }
+      .htxt { fill: #ffffff; font-size: 15px; font-weight: 600; }
+      .name { fill: #1f2328; font-size: 14px; font-weight: 600; }
+      .sub { fill: #57606a; font-size: 12.5px; }
+      .row { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1; }
+      .step { fill: #ddf4ff; stroke: #54aeff; stroke-width: 1; }
+      .band { fill: #fff8c5; stroke: #d4a72c; stroke-width: 1.2; }
+      .line { stroke: #57606a; stroke-width: 1.8; fill: none; }
+    </style>
+  </defs>
+
+  <!-- 1: CAD and export format -->
+  <rect class="box" x="20" y="24" width="290" height="318" rx="10"/>
+  <path class="head" d="M20 34 a10 10 0 0 1 10 -10 h270 a10 10 0 0 1 10 10 v26 h-290 z"/>
+  <text class="htxt" x="40" y="48">1  CAD and export format</text>
+  <g>
+    <rect class="row" x="36" y="76" width="258" height="34" rx="6"/>
+    <text class="name" x="48" y="92">Onshape</text><text class="sub" x="48" y="106">real mates via the REST API</text>
+    <rect class="row" x="36" y="116" width="258" height="34" rx="6"/>
+    <text class="name" x="48" y="132">Onshape</text><text class="sub" x="48" y="146">built-in URDF export</text>
+    <rect class="row" x="36" y="156" width="258" height="34" rx="6"/>
+    <text class="name" x="48" y="172">SolidWorks</text><text class="sub" x="48" y="186">sw2robot, run in the CAD tool</text>
+    <rect class="row" x="36" y="196" width="258" height="34" rx="6"/>
+    <text class="name" x="48" y="212">Fusion</text><text class="sub" x="48" y="226">ACDC4Robot, run in the CAD tool</text>
+    <rect class="row" x="36" y="236" width="258" height="34" rx="6"/>
+    <text class="name" x="48" y="252">Creo</text><text class="sub" x="48" y="266">creo2urdf, run in the CAD tool</text>
+    <rect class="row" x="36" y="276" width="258" height="34" rx="6"/>
+    <text class="name" x="48" y="292">Any CAD, as STEP</text><text class="sub" x="48" y="306">joints inferred from geometry</text>
+  </g>
+  <text class="sub" x="40" y="331">or any existing URDF</text>
+
+  <!-- 2: compiler -->
+  <rect class="box" x="370" y="24" width="260" height="318" rx="10"/>
+  <path class="headc" d="M370 34 a10 10 0 0 1 10 -10 h240 a10 10 0 0 1 10 10 v26 h-260 z"/>
+  <text class="htxt" x="390" y="48">2  cad2urdf compiler</text>
+  <g>
+    <rect class="step" x="390" y="76" width="220" height="40" rx="6"/>
+    <text class="name" x="404" y="93">Links, joints, inertia</text><text class="sub" x="404" y="108">from mates or geometry</text>
+    <rect class="step" x="390" y="128" width="220" height="40" rx="6"/>
+    <text class="name" x="404" y="145">Collision shapes</text><text class="sub" x="404" y="160">primitives, hulls, CoACD</text>
+    <rect class="step" x="390" y="180" width="220" height="40" rx="6"/>
+    <text class="name" x="404" y="197">Self-collision matrix</text><text class="sub" x="404" y="212">sampled, written as SRDF</text>
+    <rect class="step" x="390" y="232" width="220" height="40" rx="6"/>
+    <text class="name" x="404" y="249">URDF and MJCF</text><text class="sub" x="404" y="264">actuators, mimic, loop closures</text>
+    <rect class="step" x="390" y="284" width="220" height="40" rx="6"/>
+    <text class="name" x="404" y="301">Simulator files</text><text class="sub" x="404" y="316">one per target simulator</text>
+  </g>
+
+  <!-- 3: outputs and validation -->
+  <rect class="box" x="690" y="24" width="290" height="318" rx="10"/>
+  <path class="head" d="M690 34 a10 10 0 0 1 10 -10 h270 a10 10 0 0 1 10 10 v26 h-290 z"/>
+  <text class="htxt" x="710" y="48">3  Output and validation</text>
+  <g>
+    <rect class="row" x="706" y="76" width="258" height="30" rx="6"/><text class="name" x="718" y="96">URDF and SRDF</text>
+    <rect class="row" x="706" y="112" width="258" height="30" rx="6"/><text class="name" x="718" y="132">MJCF for MuJoCo</text>
+    <rect class="row" x="706" y="148" width="258" height="30" rx="6"/><text class="name" x="718" y="168">ManiSkill agent class</text>
+    <rect class="row" x="706" y="184" width="258" height="30" rx="6"/><text class="name" x="718" y="204">Isaac Lab ArticulationCfg</text>
+    <rect class="row" x="706" y="220" width="258" height="30" rx="6"/><text class="name" x="718" y="240">Gazebo ros2_control config</text>
+  </g>
+  <line x1="706" y1="266" x2="964" y2="266" stroke="#d0d7de" stroke-width="1"/>
+  <text class="sub" x="706" y="288" font-weight="600">Validated in</text>
+  <text class="name" x="706" y="308" font-weight="500" font-size="13">MuJoCo · PyBullet · SAPIEN</text>
+  <text class="name" x="706" y="328" font-weight="500" font-size="13">ManiSkill · Gazebo · Isaac Sim</text>
+
+  <!-- flow arrows -->
+  <path class="line" d="M312 183 H366" marker-end="url(#arrow)"/>
+  <path class="line" d="M632 183 H686" marker-end="url(#arrow)"/>
+
+  <!-- spec band -->
+  <path class="line" d="M500 392 V346" marker-end="url(#arrow)"/>
+  <rect class="band" x="20" y="392" width="960" height="46" rx="8"/>
+  <text class="name" x="38" y="412">Spec (YAML)</text>
+  <text class="sub" x="38" y="429">Drafted from the geometry, then set by you or the cad2sim agent skill: limits, materials, part classes, which joints to fix. Same inputs, same outputs.</text>
+</svg>
