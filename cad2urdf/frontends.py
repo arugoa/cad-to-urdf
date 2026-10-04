@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import base64
+import fnmatch
 import hashlib
 import io
 import json
@@ -615,9 +616,22 @@ def _add_closures(robot: Robot, closing: list, gname: dict, group_of, occ_T: dic
                       f"constraint added by hand); passive loop joints: {passive}")
 
 
-def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> Robot:
+def build_from_onshape(spec: dict, base: Path, client: Client | None = None, _plan: dict | None = None) -> Robot:
     ref = parse_url(spec["source"])
     client = client or Client(ref["host"])
+    keep = spec.get("joints_only")
+    if keep is not None and _plan is None:
+        # two passes: build once to learn every joint's name, then weld all joints not listed (fnmatch patterns)
+        # and rebuild with the kept joints keeping their names
+        plain = {k: v for k, v in spec.items() if k != "joints_only"}
+        first = build_from_onshape(plain, base, client)
+        kept = {fid: n for fid, n in first.joint_features.items() if any(fnmatch.fnmatch(n, pat) for pat in keep)}
+        robot = build_from_onshape(plain, base, client, _plan={"fixed": set(first.joint_features) - set(kept),
+                                                              "names": kept})
+        missing = [pat for pat in keep if not any(fnmatch.fnmatch(n, pat) for n in kept.values())]
+        robot.review.append(f"joints_only: kept {len(kept)} of {len(first.joint_features)} mate joints, welded the "
+                            f"rest" + (f"; no joint matches {missing}" if missing else ""))
+        return robot
     flexible = spec.get("subassemblies", "flexible") != "rigid"
     occs, occ_T, mates, relations, rigid_groups = read_assembly(
         client, ref, flexible, tuple(spec.get("rigid_subassemblies", [])))
@@ -681,6 +695,9 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
                                                                   "BALL", "FASTENED"):
             closing.append(m)
             continue
+        if _plan and m.feature_id in _plan["fixed"]:
+            uf.union(a, b)  # joints_only: every joint not listed is welded
+            continue
         if not m.name.lower().startswith("dof_") and m.type != "FASTENED" and any(
                 all(is_fastener(occs[l].name) for l in leaves_under(o)) for o in m.occ):
             uf.union(a, b)  # a screw or nut mated with a slot/cylindrical mate is still just fixed to its part
@@ -701,6 +718,11 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
         else:
             review.append(f"mate {m.name}: {m.type} not supported as a joint; ignored")
 
+    if _plan:
+        for m in planar:
+            if m.feature_id in _plan["fixed"]:
+                uf.union(rep(m.occ[0]), rep(m.occ[1]))
+        planar = [m for m in planar if m.feature_id not in _plan["fixed"]]
     moving += _resolve_planar(planar, uf, rep, occ_T, review)
 
     groups: dict = {}
@@ -761,6 +783,7 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
     links: dict[str, Link] = {}
     joints: dict[str, Joint] = {}
     joint_of_mate: dict[str, str] = {}
+    mate_joint_names: dict[str, str] = {}  # feature id -> joint name (a planar mate's chain shares one name)
     overrides = spec.get("joints", {}) or {}
     for g in order:
         name = gname[g]
@@ -784,6 +807,9 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
             while jname in joints:
                 jname = f"{base}_{k}"
                 k += 1
+            if _plan and m.feature_id in _plan["names"]:
+                jname = _plan["names"][m.feature_id]  # keep the name given in the first pass
+            mate_joint_names[m.feature_id] = jname
             if m.type == "PLANAR":
                 pl, pj = _planar_joints(m, F, c, jname, gname[pg], name, spec, review)
                 links.update(pl)
@@ -853,6 +879,7 @@ def build_from_onshape(spec: dict, base: Path, client: Client | None = None) -> 
                   set((spec.get("actuators") or {}).keys()), review)
     robot.materials["onshape_grey"] = "0.72 0.74 0.78 1"
     robot.review = review  # type: ignore[attr-defined]
+    robot.joint_features = mate_joint_names  # type: ignore[attr-defined]
     for r in review:
         print("  REVIEW", r)
     return robot

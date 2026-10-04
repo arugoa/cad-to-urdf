@@ -102,6 +102,12 @@ Onshape mates the code handles on its own (do not re-decide them by hand):
 - Planar mates between the same two bodies are combined. One planar mate is two slides and a spin (passive); two with different plane normals are a single slide along the planes' intersection; three with independent normals are a rigid joint.
 - A screw, nut or washer mated with a slot, cylindrical or revolute mate is fixed to its part, never a joint. An explicitly named `dof_*` mate is the exception and is always honoured.
 
+Trimming joints on an Onshape robot (the user names the joints that matter):
+1. Run the route once and read the joint names from the URDF (`grep '<joint ' <robot>.urdf`).
+2. Put the wanted names, or `fnmatch` patterns, in the overrides file: `joints_only: [yaw_motor_*, "*_wheel_*"]`.
+3. Re-run with `--spec`. Every other mate is welded, and the kept joints keep their names. The REVIEW line `joints_only: kept N of M` says how many matched; a pattern that matches nothing is listed.
+Do not rename mates in Onshape for this (the API key is read-only), and do not edit the generated URDF.
+
 Onshape loops: mates named `closing_*` are loop closures (MJCF `<equality connect>`). Joints inside the loop become passive; only joints on the base keep motors. If a parallel mechanism's loop isn't closed in Onshape, ask the user to rename the closing mate `closing_<name>`.
 
 ## 5. Read validation.json and iterate
