@@ -377,17 +377,3 @@ def test_non_physical_names():
         assert is_non_physical(n), n
     for n in ("Referee Mount", "Cone Bearing", "Shaft", "Safety Cover"):
         assert not is_non_physical(n), n
-
-
-def test_joints_only_welds_everything_else_and_keeps_names():
-    spec = {"source": URL, "joints_only": ["shoulder"]}
-    r = frontends.build_from_onshape(spec, None, client=FakeClient())
-    assert list(r.joints) == ["shoulder"]  # the carriage slide is welded
-    assert sorted(r.links) == ["arm", "base_link"]
-    assert any("carriage" in p.name for p in r.links["arm"].parts)
-    assert any("kept 1 of 2" in x for x in r.review)
-    both = frontends.build_from_onshape({"source": URL, "joints_only": ["*"]}, None, client=FakeClient())
-    assert sorted(both.joints) == ["carriage_slide", "shoulder"]
-    none = frontends.build_from_onshape({"source": URL, "joints_only": ["nothing_matches"]}, None,
-                                        client=FakeClient())
-    assert not none.joints and any("no joint matches" in x for x in none.review)

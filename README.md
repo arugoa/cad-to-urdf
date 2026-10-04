@@ -132,7 +132,6 @@ dynamics:  {default: {damping: 0.5, friction: 0.05, armature: 0.01}}
 actuators: {default: {kind: position, kp: 200, kv: 10}, gripper_to_finger_2: {kind: none}}
 collision: {default: {mode: auto, max_geoms: 12}, finger: {mode: decompose}}
 simplify:  {drop_fasteners: true, visual_faces_per_link: 20000}   # or `simplify: false`
-joints_only: [yaw_*, "*_wheel_revolute_1"]                    # Onshape: keep only these joints (fnmatch), weld the rest
 root_rpy:  [1.5708, 0, 0]                                     # Y-up export -> Z-up
 closures:                                                     # loops a URDF tree can't hold
   pump_hinge: {link1: upper_arm, link2: pump_rod, point: [14.91, 88.89, 51.34]}   # CAD units
