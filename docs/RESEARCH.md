@@ -253,7 +253,7 @@ for j in list(root.allJoints) + list(root.allAsBuiltJoints):
 
 ### 4.6 STEP only: geometric inference (implemented)
 
-STEP AP214/AP242 keeps part names, the assembly tree, placement and exact B-rep. AP242 *can* carry kinematics, but CAD exporters rarely write it (unverified). So joints must be inferred. `cad2urdf/joints.py` does this (verified):
+STEP AP214/AP242 keeps part names, the assembly tree, placement and exact B-rep. AP242 *can* carry kinematics, but CAD exporters rarely write it (unverified). So joints must be inferred. `cad2urdf/step.py` does this (verified):
 
 1. Group parts into links first (spec patterns, or rigid sub-assemblies). Otherwise every bolt-in-hole looks like a joint.
 2. Collect every cylindrical face: axis, radius, axial extent, and whether it is a shaft (convex, normal pointing out) or a bore (concave).
@@ -540,7 +540,7 @@ Validation results (`python -m cad2urdf.validate examples/arm4/output`) (verifie
 
 *Implemented as `python -m cad2urdf.route` (deterministic) and the `cad2sim` skill (`.agents/skills/cad2sim`, symlinked into `.claude/skills`) for the steps that need judgment.*
 
-Principle. Mature exporters already read each CAD package's mates well, so they are the front end (layers 1 and 2). No exporter produces per-link collision, a sampled SRDF, dynamics beyond URDF, or files for several simulators. That is the finish stage (layer 3), and it's the same compiler for every route. A plain URDF→URDF "sim-to-sim" step would lose the per-part structure the finish needs. So the front end hands over its URDF *with one visual per part*, and the finish ingests that (`cad2urdf/ingest.py`).
+Principle. Mature exporters already read each CAD package's mates well, so they are the front end (layers 1 and 2). No exporter produces per-link collision, a sampled SRDF, dynamics beyond URDF, or files for several simulators. That is the finish stage (layer 3), and it's the same compiler for every route. A plain URDF→URDF "sim-to-sim" step would lose the per-part structure the finish needs. So the front end hands over its URDF *with one visual per part*, and the finish ingests that (`cad2urdf/frontends.py`).
 
 ### 9.1 Layers 1 + 2: front end per CAD and format
 
@@ -558,10 +558,11 @@ When to choose STEP over native: only when you have no access to the CAD tool or
 Deterministic STEP draft (`cad2urdf/step.py`), rules:
 1. Parts whose B-reps touch form one link, unless the contact is a running fit.
 2. A running fit is a coaxial shaft and bore with radial clearance of 0.005–0.15 mm. Zero clearance is a press fit (fixed). More than 0.15 mm is a fastener hole (fixed if the parts touch elsewhere).
-3. The root link is the component with parts named base/chassis/frame, otherwise the largest one.
+3. The root link is the largest component by volume, unless the spec's `part_classes.root` patterns name one.
 4. The joint tree is built breadth-first over running fits, preferring the longest engagement.
 5. A fit with a long free shaft is "cylindrical" and is drafted as prismatic.
 6. Limits, materials and mimic couplings are emitted as `REVIEW` lines.
+7. Bearings, servo horns, gears, fasteners and placeholder solids are recognised only through the spec's `part_classes` (name patterns; the agent skill ships the default library). The code holds no part-name knowledge.
 
 On `arm4` this recovers all 7 links and 6 joint types exactly (verified). It needs the one modelling convention in rule 2. Without it, a motor face touching a pin end welds two links together, which is how it caught two modelling errors in the original sample.
 

@@ -6,4 +6,3 @@ __pycache__/
 *_probe.srdf
 build/
 .env
-.venv-isaac/

@@ -77,14 +77,6 @@ def _mimic_err(q: dict[str, float], urdf: Path) -> float:
     return round(float(max(errs)), 5) if errs else 0.0
 
 
-def _masses(urdf: Path) -> dict[str, float]:
-    out = {}
-    for l in ET.parse(urdf).getroot().findall("link"):
-        m = l.find("inertial/mass")
-        out[l.get("name")] = float(m.get("value")) if m is not None else 0.0
-    return out
-
-
 def _fixed_base(out_dir: Path, urdf: Path) -> bool:
     srdf = urdf.with_suffix(".srdf")
     if srdf.exists():

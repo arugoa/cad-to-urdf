@@ -121,7 +121,6 @@ def main(argv=None):
 
 
 CADS = ("onshape", "solidworks", "fusion", "creo", "urdf")
-FORMATS = ("native", "step")
 SIMS = ("maniskill", "mujoco", "isaaclab", "gazebo", "pybullet")
 
 
