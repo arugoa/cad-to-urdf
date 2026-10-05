@@ -1,6 +1,6 @@
 ---
 name: cad2sim
-description: Convert a CAD robot (Onshape, SolidWorks, Fusion, Creo, a STEP file, or an existing URDF) into simulation-ready files for ManiSkill, MuJoCo, Isaac Lab, Gazebo or PyBullet using this repo's deterministic router (python -m cad2urdf.route). Use when the user wants a URDF/SRDF/MJCF/sim config from CAD, asks to "put this robot in <simulator>", or hands over a .step/.urdf/Onshape link to convert.
+description: Convert a CAD robot (Onshape, SolidWorks, Fusion, Creo, a STEP file, or an existing URDF) into simulation-ready files for ManiSkill, MuJoCo, Isaac Lab, Gazebo or PyBullet using this repo's deterministic router (python -m cad2urdf.route). Use when the user wants a URDF/SRDF/MJCF/sim config from CAD, asks to "put this robot in <simulator>", or hands over a .step/.urdf/Onshape link to convert. Also use it to test a generated asset in simulation: armature not applied, wrong units or limits, assets that explode at high accelerations.
 ---
 
 # cad2sim
@@ -9,7 +9,7 @@ The conversion is deterministic: `python -m cad2urdf.route`. The code settles ev
 1. which route to take;
 2. getting the CAD-side export done, which sometimes has to happen inside the CAD tool;
 3. judgment calls the code leaves out: what a part is (`part_classes`), which generated joints are real mechanisms, limits, materials, orientation;
-4. reading validation output and fixing the spec.
+4. reading validation output, testing the asset in simulation, and fixing the spec.
 
 Never hand-edit generated URDF/MJCF/SRDF files: change the spec and re-run. Never invent geometry, frames or inertia: those come from the CAD or the exporter. Run everything from the repo root with ROS kept out of Python: `env -u PYTHONPATH .venv/bin/python -m ...`.
 
@@ -51,7 +51,7 @@ python -m cad2urdf.route --cad <cad> --format <fmt> --sim <sim> --run \
 
 Always pass the part-class library: the code has no name knowledge of its own, so without it nothing is dropped as a fastener and no bearing, servo or gear is recognised.
 
-Outputs in `--out`: `<robot>.urdf`, `.srdf`, `mjcf/`, `maniskill/`, `isaaclab/`, `gazebo/`, `meshes/`, `report.json`, `validation.json`, and for STEP input `robot_spec.draft.yaml`.
+Outputs in `--out`: `<robot>.urdf`, `.srdf`, `mjcf/`, `usd/` (layered USDA with `Physics` variants physx, mujoco, physics, none), `maniskill/`, `isaaclab/`, `gazebo/`, `meshes/`, `report.json`, `validation.json`, and for STEP input `robot_spec.draft.yaml`. For Isaac Lab spawn the USD with variant `physx`; for Newton use `mujoco`.
 
 ### Part classes: what a part is
 
@@ -143,9 +143,49 @@ Mates and shaft fits also produce joints that are not mechanisms: bearings, shaf
 | MuJoCo URDF import fails, MJCF works | expected (massless dummy links, `package://` paths) | use `mjcf/<robot>.xml` for MuJoCo |
 | robot loads sideways | the document or export is Y-up | `root_rpy: [1.5708, 0, 0]` |
 
+After a clean validation, test the asset in simulation (section 8) before handing it over.
+
 Report to the user: the route used; which REVIEW items you resolved and how; the validation lines for the target simulator; anything you could not verify (Isaac Lab and Gazebo need their own installs).
 
-## 8. Determinism
+## 8. Test the asset in simulation
+
+A load test does not catch what simulators and converters get wrong. `python -m cad2urdf.asset_test` does, and writes `asset_test.json`; you read its flags, find the cause, fix the spec and re-run.
+
+```bash
+python -m cad2urdf.asset_test build/<robot>                       # audit, file consistency, MuJoCo dynamics
+python -m cad2urdf.asset_test build/<robot> --sims mujoco,newton  # plus what Newton's USD import reads
+python -m cad2urdf.asset_test build/<robot> --sims mujoco,newton,isaac
+```
+
+`isaac` launches Isaac Sim (about 9 GB of RAM, one minute): ask the user before every launch, run it alone and never beside another heavy job. Without permission, say that the Isaac readback is unverified.
+
+| Check | Catches |
+|---|---|
+| audit | non-positive mass, inertia that is not positive definite or breaks the triangle inequality, extreme link mass ratios, limits that are not an interval, missing effort or velocity |
+| consistency | URDF vs MJCF vs every USD variant (`physx`, `mujoco`): armature, stiffness, damping, limits, efforts, masses, world joint axes |
+| dynamics (MuJoCo) | a hold, a step response per joint, a bang-bang acceleration test, a random sweep with contacts: explosion, overshoot, settling error, speed over the limit, contact depth |
+| `newton` | what Newton's default USD import reads: it ignores `physxJoint:armature`, so the `physx` variant gives it zero armature |
+| `isaac` | what Isaac applied to the USD per joint, against what the file says, then a bang-bang stress |
+
+Each flag is an `error` (fix it), a `warning` (judge it) or an `info` (know it). Signatures and fixes:
+
+| Signature | Likely cause | Fix in the spec |
+|---|---|---|
+| bang-bang or a step response explodes | armature below `16*kp*dt^2`, or not applied by that engine | raise `dynamics.<joint>.armature` or lower `actuators.<joint>.kp`, then re-check every engine |
+| armature, limits or axes differ between files or engines | an engine reads a namespace the file lacks, or a unit or frame bug in a writer | none: report it as a code bug; do not hand-edit |
+| stiffness differs by about 57.3 | degrees vs radians (UsdPhysics angular gains and limits are per degree) | a writer bug: report it |
+| Newton `physx` variant shows zero armature | expected: Newton's default import ignores PhysX attributes | run Newton on the `mujoco` variant, or pass `SchemaResolverPhysx` |
+| settles away from the target | effort limit too low for the load, or the target hits a stop or a contact | raise `joints.<name>.effort`, or move the target |
+| peak speed over 3x the velocity limit | too little damping for the gains | raise `dynamics.<joint>.damping` or lower `kp` |
+| contact penetrates more than 10 mm | fat collision shapes at a joint | set that link's `collision.<link>.mode` to `decompose` or `primitives` |
+| random sweep explodes | a collision pair that should be excluded, or a missing armature | exclude the pair in `srdf`, or fix the armature |
+| link mass ratio over 1000:1 | a tiny link, or a missing material | check `part_materials` and tiny links |
+
+Newton ignores `physxJoint:maxJointVelocity` for solver enforcement: bound speed with damping, not with that attribute. Engines can be checked at once by separate subagents (one for `mujoco`, one for `newton`); Isaac runs alone. For the same scenario across simulators, use the sim2sim skill.
+
+After each change re-read the flags and keep a short list of what changed and why. Stop when there are no errors; explain each warning that remains. Report the flag counts, each error with its cause and the spec change you made, and anything unverified (no Isaac run, no Newton install).
+
+## 9. Determinism
 
 The same inputs must give byte-identical outputs: all sampling is seeded, ordering is sorted, and the router makes every decision that geometry or mates can settle. Stay on the right side of this line:
 

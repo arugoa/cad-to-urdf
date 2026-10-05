@@ -1,6 +1,6 @@
 """Load the outputs in each installed simulator and check them.
 
-    python -m cad2urdf.validate OUTDIR [--sims yourdfpy,mujoco,pybullet,sapien,maniskill,gazebo,isaac]
+    python -m cad2urdf.validate OUTDIR [--sims yourdfpy,mujoco,pybullet,sapien,maniskill,gazebo,isaac,isaac_urdf]
 
 Every check drives the position-controlled joints to the same small test pose and reports tracking error,
 stability and mimic error. Isaac Sim only runs when named in --sims.
@@ -385,8 +385,10 @@ def isaac_python() -> Path | None:
     return None
 
 
-def check_isaac(urdf: Path, fixed: bool) -> dict:
-    """Isaac Sim: import with its URDF importer (as Isaac Lab's UrdfFileCfg does), drive, step PhysX."""
+def check_isaac(urdf: Path, fixed: bool, use_usd: bool = True) -> dict:
+    """Isaac Sim: load the USD asset the way Isaac Lab spawns it (or, with ``use_usd=False`` or no USD, import
+    the URDF), drive it and step PhysX. For USD the values Isaac applied are read back and compared with the file,
+    then a high-acceleration stress runs."""
     import os
 
     avail_gb = meminfo_gb("MemAvailable")
@@ -402,9 +404,19 @@ def check_isaac(urdf: Path, fixed: bool) -> dict:
     icd = Path("/usr/share/vulkan/icd.d/nvidia_icd.json")
     if icd.exists():
         env["VK_ICD_FILENAMES"] = str(icd)  # hybrid laptops: keep Vulkan on the NVIDIA GPU
-    args = [str(py), str(Path(__file__).with_name("isaac_probe.py")), str(urdf.resolve()), json.dumps(test_pose(urdf))]
-    if not fixed:
-        args.append("--floating")
+    usda = urdf.parent / "usd" / f"{urdf.stem}.usda"
+    if use_usd and usda.exists():
+        from .usd_asset import expectations
+
+        expect = urdf.parent / "usd" / "_isaac_expect.json"
+        expect.write_text(json.dumps(expectations(usda)))
+        args = [str(py), "-P", str(Path(__file__).with_name("isaac_probe.py")), str(usda.resolve()),
+                json.dumps(test_pose(urdf)), "--usd", "--expect", str(expect)]
+    else:
+        args = [str(py), "-P", str(Path(__file__).with_name("isaac_probe.py")), str(urdf.resolve()),
+                json.dumps(test_pose(urdf))]
+        if not fixed:
+            args.append("--floating")
     try:
         r = subprocess.run(args, capture_output=True, text=True, env=env, timeout=1800)
     except subprocess.TimeoutExpired:
@@ -511,6 +523,8 @@ def main(argv=None):
         checks.append(("maniskill", lambda: check_maniskill(out, urdf)))
     if "gazebo" in sims:
         checks.append(("gazebo", lambda: check_gazebo(urdf, fixed)))
+    if "isaac_urdf" in sims:
+        checks.append(("isaac_urdf", lambda: check_isaac(urdf, fixed, use_usd=False)))
     if "isaac" in sims:
         checks.append(("isaac", lambda: check_isaac(urdf, fixed)))
     results = {"test_pose": test_pose(urdf)}

@@ -1,9 +1,15 @@
-"""Import a URDF with Isaac Sim's URDF importer (as Isaac Lab does), drive it and report.
+"""Load a robot in Isaac Sim, drive it and report. No cad2urdf imports, so it runs in any Python with Isaac Sim.
 
-    .venv/bin/python cad2urdf/isaac_probe.py ROBOT.urdf '{"joint": target, ...}' [--floating] [--gui]
+    isaac_probe.py ROBOT.urdf '{"joint": target, ...}' [--floating] [--gui]
+    isaac_probe.py ROBOT.usda '{"joint": target, ...}' --usd [--expect EXPECT.json]
 
-Prints one ``ISAAC_RESULT {json}`` line; ``--gui`` keeps the window open instead. Supports Isaac Sim 6.x
-and 5.x. No cad2urdf imports, so it runs in any Python that has Isaac Sim.
+A URDF goes through Isaac Sim's URDF importer (as Isaac Lab's UrdfFileCfg does). With ``--usd`` the asset is
+referenced into the stage the way Isaac Lab spawns it, the per-joint values Isaac applied (armature, gains,
+limits, efforts, masses) are read back and compared with ``--expect`` (a JSON of what the file says), and a
+high-acceleration stress is run: that is where a missing armature shows up as an explosion.
+
+Prints one ``ISAAC_RESULT {json}`` line; ``--gui`` keeps the window open instead. Supports Isaac Sim 6.x and 5.x
+(5.x for URDF only).
 """
 
 import json
@@ -23,31 +29,150 @@ from isaacsim.core.utils.extensions import enable_extension  # noqa: E402
 enable_extension("isaacsim.asset.importer.urdf")
 app.update()
 
-urdf, targets = sys.argv[1], json.loads(sys.argv[2])
+asset, targets = sys.argv[1], json.loads(sys.argv[2])
 floating = "--floating" in sys.argv
+USD = "--usd" in sys.argv
+expect = json.load(open(sys.argv[sys.argv.index("--expect") + 1])) if "--expect" in sys.argv else {}
 STEPS = 720  # 3 s at 240 Hz
-out = {}
-
+STRESS_STEPS, STRESS_PERIOD = 480, 12  # 2 s of +-targets flipping every 50 ms: a bang-bang acceleration test
+out = {"mode": "usd" if USD else "urdf"}
 
 def _np(x):
     x = x.numpy() if hasattr(x, "numpy") else x
     return np.asarray(x, dtype=float).reshape(-1)
 
 
+def _arrays(x):
+    """A getter's result as a list of float arrays: Isaac returns an array or a tuple of arrays."""
+    items = x if isinstance(x, (tuple, list)) else [x]
+    return [np.asarray(i.numpy() if hasattr(i, "numpy") else i, dtype=float) for i in items]
+
+
+def _read(art, getters):
+    for g in getters:
+        if hasattr(art, g):
+            return _arrays(getattr(art, g)())[0]
+    return None
+
+
+def _limits(art, n):
+    """(lower, upper) per DOF: the array is (1, n, 2) or (2, n) depending on the release, so the layout is detected."""
+    if not hasattr(art, "get_dof_limits"):
+        return None
+    arrays = _arrays(art.get_dof_limits())
+    if len(arrays) == 2 and arrays[0].size == n:  # a (lower, upper) tuple
+        return arrays[0].reshape(-1), arrays[1].reshape(-1)
+    a = arrays[0].reshape(-1)
+    if a.size != 2 * n:
+        return None
+    rows = a.reshape(2, n)
+    if np.all(rows[0] <= rows[1]):  # [all lowers, all uppers]
+        return rows[0], rows[1]
+    pairs = a.reshape(n, 2)
+    return pairs[:, 0], pairs[:, 1]
+
+
+def readback(art, names):
+    """{joint: {armature, stiffness, damping, effort, velocity, friction, lower, upper}} as Isaac holds them."""
+    n = len(names)
+    got, missing = {name: {} for name in names}, []
+    for field, getters in (("armature", ("get_dof_armatures",)), ("effort", ("get_dof_max_efforts",)),
+                           ("velocity", ("get_dof_max_velocities",))):
+        arr = _read(art, getters)
+        if arr is None:
+            missing.append(field)
+            continue
+        for i, name in enumerate(names):
+            got[name][field] = float(arr.reshape(-1)[i])
+    if hasattr(art, "get_dof_gains"):
+        gains = _arrays(art.get_dof_gains())
+        for field, arr in zip(("stiffness", "damping"), gains):
+            for i, name in enumerate(names):
+                got[name][field] = float(arr.reshape(-1)[i])
+    else:
+        missing += ["stiffness", "damping"]
+    if hasattr(art, "get_dof_friction_properties"):
+        props = _arrays(art.get_dof_friction_properties())
+        # Isaac's static/dynamic/viscous friction model: a different attribute from physxJoint:jointFriction, so it
+        # is reported, not compared
+        out["friction_properties"] = [[round(float(v), 6) for v in p.reshape(-1)[:n]] for p in props]
+    lim = _limits(art, n)
+    if lim is None:
+        missing.append("limits")
+    else:
+        for i, name in enumerate(names):
+            got[name]["lower"], got[name]["upper"] = float(lim[0][i]), float(lim[1][i])
+    out["api_missing"] = missing
+    out["api_get"] = sorted(m for m in dir(art) if m.startswith("get_dof"))[:40]
+    return got
+
+
+def compare(got, want):
+    """Mismatches between what Isaac applied and what the file says. Gains may be per radian or per degree."""
+    bad, units = [], {}
+    for joint, w in want.items():
+        g = got.get(joint)
+        if g is None:
+            bad.append({"joint": joint, "field": "joint", "expected": "present", "got": "missing"})
+            continue
+        for field, exp in w.items():
+            val = g.get(field)
+            if val is None or not np.isfinite(val):
+                continue
+            tol = 1e-3 * max(abs(exp), 1.0) if field in ("lower", "upper") else 2e-3 * abs(exp) + 1e-6
+            ok = abs(val - exp) <= tol
+            if not ok and field in ("stiffness", "damping") and exp:
+                for unit, factor in (("per_deg", np.pi / 180), ("per_rad", 180 / np.pi)):
+                    if abs(val - exp * factor) <= 2e-3 * abs(exp * factor) + 1e-6:
+                        units[field] = unit
+                        ok = True
+            if not ok:
+                bad.append({"joint": joint, "field": field, "expected": round(exp, 6), "got": round(val, 6)})
+    out["gain_units_vs_file"] = units
+    return bad
+
+
+def stress(art, names, q_target, SimulationManager):
+    """Bang-bang targets at 80% of each joint's range: finite state and bounded speed, or it blew up."""
+    lo = hi = None
+    lim = _limits(art, len(names))
+    if lim is not None:
+        lo, hi = lim
+    amp = np.full(len(names), 0.6)
+    if lo is not None:
+        span = np.where(np.isfinite(hi - lo) & ((hi - lo) < 50), 0.4 * (hi - lo), 0.6)
+        amp = np.minimum(span, 1.2)
+    max_v, finite = 0.0, True
+    for k in range(STRESS_STEPS):
+        sign = 1.0 if (k // STRESS_PERIOD) % 2 == 0 else -1.0
+        art.set_dof_position_targets(np.array([sign * amp], dtype=np.float32))
+        SimulationManager.step()
+        app.update()
+        qd = _np(art.get_dof_velocities())
+        finite = finite and bool(np.all(np.isfinite(qd)))
+        if finite:
+            max_v = max(max_v, float(np.max(np.abs(qd))))
+    out["stress"] = {"finite": finite, "max_joint_speed": round(max_v, 2), "exploded": (not finite) or max_v > 500.0}
+
+
 def run_isaac6():
     import omni.timeline
-    from isaacsim.asset.importer.urdf import URDFImporter, URDFImporterConfig
     import isaacsim.core.experimental.utils.stage as stage_utils
     from isaacsim.core.experimental.prims import Articulation
     from isaacsim.core.simulation_manager import SimulationManager
     from pxr import Gf, UsdGeom, UsdPhysics
 
-    usd_dir = os.path.join(os.path.dirname(urdf), "_isaac_usd")
-    cfg = URDFImporterConfig(urdf_path=urdf, usd_path=usd_dir, fix_base=not floating, merge_fixed_joints=False,
-                             collision_from_visuals=False, collision_type="Convex Hull", allow_self_collision=False,
-                             joint_drive_type="force", joint_target_type="position",
-                             override_joint_stiffness=1e4, override_joint_damping=1e3)
-    usd = URDFImporter(cfg).import_urdf()
+    if USD:
+        usd = asset
+    else:
+        from isaacsim.asset.importer.urdf import URDFImporter, URDFImporterConfig
+
+        usd_dir = os.path.join(os.path.dirname(asset), "_isaac_usd")
+        cfg = URDFImporterConfig(urdf_path=asset, usd_path=usd_dir, fix_base=not floating, merge_fixed_joints=False,
+                                 collision_from_visuals=False, collision_type="Convex Hull", allow_self_collision=False,
+                                 joint_drive_type="force", joint_target_type="position",
+                                 override_joint_stiffness=1e4, override_joint_damping=1e3)
+        usd = URDFImporter(cfg).import_urdf()
     out["usd"] = os.path.basename(usd)
     stage_utils.create_new_stage()
     stage = stage_utils.get_current_stage()
@@ -59,18 +184,48 @@ def run_isaac6():
     plane.CreateAxisAttr("Z")
     UsdPhysics.CollisionAPI.Apply(plane.GetPrim())
     stage_utils.add_reference_to_stage(usd, "/World/robot")
-    # Isaac Sim 6.x puts physics in a "Physics" variant set with no default selection
+    # the ground goes just under the robot, as in the MJCF: a robot whose CAD origin is mid-body would otherwise
+    # start inside a ground at z = 0 and be thrown out of it
+    from pxr import Usd
+
+    cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render,
+                                                       UsdGeom.Tokens.proxy, UsdGeom.Tokens.guide])
+    lowest = float(cache.ComputeWorldBound(stage.GetPrimAtPath("/World/robot")).ComputeAlignedRange().GetMin()[2])
+    plane.CreateWidthAttr(20.0)
+    plane.CreateLengthAttr(20.0)
+    UsdGeom.Xformable(plane).AddTranslateOp().Set(Gf.Vec3d(0, 0, min(0.0, lowest) - 0.01))
+    out["ground_z"] = round(min(0.0, lowest) - 0.01, 4)
+    # a Physics variant set (Isaac Sim 6.x importer output, and our USD) may have no default selection
     vsets = stage.GetPrimAtPath("/World/robot").GetVariantSets()
     if vsets.HasVariantSet("Physics"):
-        vsets.GetVariantSet("Physics").SetVariantSelection("physx")
+        vs = vsets.GetVariantSet("Physics")
+        if not vs.GetVariantSelection():
+            vs.SetVariantSelection("physx")
+        out["physics_variant"] = vs.GetVariantSelection()
     roots = [str(p.GetPath()) for p in stage.Traverse() if p.HasAPI(UsdPhysics.ArticulationRootAPI)]
     if not roots:
-        raise RuntimeError("no articulation root in the imported USD")
+        raise RuntimeError("no articulation root in the USD")
+    out["articulation_roots"] = len(roots)
+    if "--no-self-collision" in sys.argv:  # a diagnostic: is a mismatch caused by the links colliding with each other?
+        attr = stage.GetPrimAtPath(roots[0]).GetAttribute("physxArticulation:enabledSelfCollisions")
+        if attr:
+            attr.Set(False)
+        out["self_collision"] = "off"
     SimulationManager.set_physics_dt(1 / 240)
     omni.timeline.get_timeline_interface().play()
     app.update()
     art = Articulation(roots[0])
     names = list(art.dof_names)
+    out["dof_names"] = names
+    if USD:
+        got = readback(art, names)
+        if expect:
+            out["mismatches"] = compare(got, expect.get("joints", {}))
+            out["mismatch_count"] = len(out["mismatches"])
+            if hasattr(art, "get_link_masses"):
+                total = float(np.sum(_np(art.get_link_masses())))
+                out["mass_total"] = round(total, 5)
+                out["mass_expected"] = expect.get("total_mass")
     q_target = np.array([[targets.get(n, 0.0) for n in names]], dtype=np.float32)
     art.set_dof_position_targets(q_target)
     if GUI:  # physics steps with the timeline until the window closes
@@ -81,7 +236,10 @@ def run_isaac6():
     for _ in range(STEPS):
         SimulationManager.step()
         app.update()
-    return names, q_target[0], _np(art.get_dof_positions())
+    q = _np(art.get_dof_positions())
+    if USD:
+        stress(art, names, q_target, SimulationManager)
+    return names, q_target[0], q
 
 
 def run_isaac5():
@@ -99,7 +257,7 @@ def run_isaac5():
     cfg.default_drive_type = 1  # position drive
     cfg.default_drive_strength = 1e4
     cfg.default_position_drive_damping = 1e3
-    ok, prim = omni.kit.commands.execute("URDFParseAndImportFile", urdf_path=urdf, import_config=cfg,
+    ok, prim = omni.kit.commands.execute("URDFParseAndImportFile", urdf_path=asset, import_config=cfg,
                                          get_articulation_root=True)
     world = World(stage_units_in_meters=1.0, physics_dt=1 / 240)
     world.scene.add_default_ground_plane()
@@ -121,8 +279,11 @@ try:
     except ImportError:
         new_api = False
     out["isaac_api"] = "6.x" if new_api else "5.x"
+    if USD and not new_api:
+        raise RuntimeError("--usd needs Isaac Sim 6.x")
     names, q_target, q = run_isaac6() if new_api else run_isaac5()
     driven = [i for i, n in enumerate(names) if n in targets]
+    out["tracking_detail"] = {names[i]: [round(float(q_target[i]), 4), round(float(q[i]), 4)] for i in driven}
     out.update(
         dofs=len(names),
         joints_checked=len(driven),

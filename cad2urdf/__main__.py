@@ -53,7 +53,7 @@ def main(argv=None):
     disabled, stats = writers.collision_matrix(robot, out / "meshes", samples=samples)
     writers.build_srdf(robot, disabled).write(out / f"{robot.name}.srdf", encoding="unicode", xml_declaration=True)
 
-    print("5/6 MJCF + Isaac Lab / ManiSkill / Gazebo side files")
+    print("5/6 MJCF, USD + Isaac Lab / ManiSkill / Gazebo side files")
     # MuJoCo doesn't filter parent/child contacts when the parent is welded to the world
     excludes = [p for p, r in disabled.items() if r in ("Adjacent", "Default", "Always")]
     keyframes = {}
@@ -61,6 +61,9 @@ def main(argv=None):
         keyframes[name] = writers.expand_mimic(robot, {**{j: 0.0 for j in robot.joints}, **st["joints"]})
     writers.write_mjcf(robot, out / "mjcf" / f"{robot.name}.xml", meshdir="../meshes", excludes=excludes,
                     keyframes=keyframes)
+    from . import usd_asset  # lazy: pxr loads heavy native libraries
+
+    usd_asset.write_usd(robot, out / "usd", excludes=excludes)
     writers.write_targets(robot, out)
 
     print("6/6 report + joint-limit sweep")
