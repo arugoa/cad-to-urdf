@@ -2,11 +2,15 @@
 
     isaac_probe.py ROBOT.urdf '{"joint": target, ...}' [--floating] [--gui]
     isaac_probe.py ROBOT.usda '{"joint": target, ...}' --usd [--expect EXPECT.json]
+    isaac_probe.py ROBOT.usda '{}' --usd --trajectory SPEC.json
 
 A URDF goes through Isaac Sim's URDF importer (as Isaac Lab's UrdfFileCfg does). With ``--usd`` the asset is
 referenced into the stage the way Isaac Lab spawns it, the per-joint values Isaac applied (armature, gains,
 limits, efforts, masses) are read back and compared with ``--expect`` (a JSON of what the file says), and a
 high-acceleration stress is run: that is where a missing armature shows up as an explosion.
+
+``--trajectory`` runs the sim2sim scenario instead: the drive stiffness is zeroed and the spec's joint torques are
+applied as efforts every physics step, and the joint trajectory is returned.
 
 Prints one ``ISAAC_RESULT {json}`` line; ``--gui`` keeps the window open instead. Supports Isaac Sim 6.x and 5.x
 (5.x for URDF only).
@@ -53,6 +57,15 @@ def _read(art, getters):
         if hasattr(art, g):
             return _arrays(getattr(art, g)())[0]
     return None
+
+
+def _damping(art):
+    """Per-DOF drive damping: ``get_dof_gains()`` returns (stiffness, damping) in this Isaac Sim release."""
+    if hasattr(art, "get_dof_gains"):
+        arrays = _arrays(art.get_dof_gains())
+        if len(arrays) == 2:
+            return arrays[1].reshape(-1)
+    return _read(art, ("get_dof_dampings",))
 
 
 def _limits(art, n):
@@ -155,6 +168,74 @@ def stress(art, names, q_target, SimulationManager):
     out["stress"] = {"finite": finite, "max_joint_speed": round(max_v, 2), "exploded": (not finite) or max_v > 500.0}
 
 
+def trajectory(art, names, spec, SimulationManager):
+    """The sim2sim scenario: explicit torques tau = clip(kp (target - q) - kv qdot, effort), joints matched by name."""
+    n = len(names)
+    idx = [names.index(j) for j in spec["names"]]
+    kv = np.array(spec["kv"])
+    passive = np.zeros(n)
+    got = _damping(art)
+    if got is not None:
+        passive[idx] = np.maximum(got[idx] - kv, 0.0)   # the USD's drive damping is kv plus passive damping
+    art.set_dof_gains(np.zeros((1, n), dtype=np.float32), passive.reshape(1, n).astype(np.float32))
+    kp, effort = np.array(spec["kp"]), np.array(spec["effort"])
+    out_q = []
+    for k in range(spec["steps"]):
+        q = _np(art.get_dof_positions())[idx]
+        qd = _np(art.get_dof_velocities())[idx]
+        tgt = np.array(spec["targets"][min(k // spec["control_every"], len(spec["targets"]) - 1)])
+        tau = np.zeros(n)
+        tau[idx] = np.clip(kp * (tgt - q) - kv * qd, -effort, effort)
+        art.set_dof_efforts(tau.reshape(1, n).astype(np.float32))
+        SimulationManager.step()  # one physics step. No app.update() here: with the timeline playing it would advance
+        #                           physics by a whole rendering frame and shift the clock against the other engines
+        if k % spec["control_every"] == 0:
+            out_q.append(_np(art.get_dof_positions())[idx].tolist())
+    out["trajectory"] = out_q
+
+
+def diagnose(art, names, spec, SimulationManager):
+    """A constant 1 N m on the first spec joint with the drive off: what the engine does with a plain push."""
+    import omni.timeline
+
+    n = len(names)
+    j = names.index(spec["names"][0])
+    kv = np.array(spec["kv"])
+    got = _damping(art)
+    passive = np.zeros(n)
+    if got is not None:
+        passive[j] = max(float(got[j]) - kv[0], 0.0)
+    art.set_dof_gains(np.zeros((1, n), dtype=np.float32), passive.reshape(1, n).astype(np.float32))
+    info = {"joint": names[j], "passive_damping_set": float(passive[j])}
+    for field, getter in (("armature", "get_dof_armatures"), ("damping_after", "get_dof_dampings"),
+                          ("stiffness_after", "get_dof_stiffnesses"), ("max_velocity", "get_dof_max_velocities")):
+        arr = _read(art, (getter,))
+        info[field] = None if arr is None else float(arr.reshape(-1)[j])
+    if hasattr(art, "get_dof_gains"):
+        info["gains_after"] = [[round(float(v), 6) for v in a.reshape(-1)] for a in _arrays(art.get_dof_gains())]
+    tl = omni.timeline.get_timeline_interface()
+    t0 = tl.get_current_time()
+    trace = []
+    for k in range(300):
+        tau = np.zeros(n, dtype=np.float32)
+        tau[j] = 1.0
+        art.set_dof_efforts(tau.reshape(1, n))
+        SimulationManager.step()
+        if k % 25 == 24:
+            trace.append(round(float(_np(art.get_dof_positions())[j]), 6))
+    info["q_trace_every_25_steps"] = trace
+    release = []  # then no torque at all: damping alone would coast to a stop, a spring would pull the joint back
+    for k in range(300):
+        art.set_dof_efforts(np.zeros((1, n), dtype=np.float32))
+        SimulationManager.step()
+        if k % 25 == 24:
+            release.append(round(float(_np(art.get_dof_positions())[j]), 6))
+    info["q_release_every_25_steps"] = release
+    info["sim_time_after_300_steps"] = round(float(tl.get_current_time() - t0), 6)
+    info["physics_dt"] = float(SimulationManager.get_physics_dt()) if hasattr(SimulationManager, "get_physics_dt") else None
+    out["diagnose"] = info
+
+
 def run_isaac6():
     import omni.timeline
     import isaacsim.core.experimental.utils.stage as stage_utils
@@ -206,12 +287,21 @@ def run_isaac6():
     if not roots:
         raise RuntimeError("no articulation root in the USD")
     out["articulation_roots"] = len(roots)
+    for flag, attr, value in (("--no-joint-friction", "physxJoint:jointFriction", 0.0),
+                              ("--no-velocity-cap", "physxJoint:maxJointVelocity", 1.0e6)):
+        if flag in sys.argv:  # diagnostics: neutralise one PhysX attribute on every joint
+            for prim in stage.Traverse():
+                a = prim.GetAttribute(attr) if prim.HasAttribute(attr) else None
+                if a:
+                    a.Set(value)
+            out[flag.lstrip("-").replace("-", "_")] = True
     if "--no-self-collision" in sys.argv:  # a diagnostic: is a mismatch caused by the links colliding with each other?
         attr = stage.GetPrimAtPath(roots[0]).GetAttribute("physxArticulation:enabledSelfCollisions")
         if attr:
             attr.Set(False)
         out["self_collision"] = "off"
-    SimulationManager.set_physics_dt(1 / 240)
+    dt = json.load(open(sys.argv[sys.argv.index("--trajectory") + 1]))["dt"] if "--trajectory" in sys.argv else 1 / 240
+    SimulationManager.set_physics_dt(dt)  # before play: it cannot change while the simulation runs
     omni.timeline.get_timeline_interface().play()
     app.update()
     art = Articulation(roots[0])
@@ -226,6 +316,12 @@ def run_isaac6():
                 total = float(np.sum(_np(art.get_link_masses())))
                 out["mass_total"] = round(total, 5)
                 out["mass_expected"] = expect.get("total_mass")
+    if "--diagnose" in sys.argv:
+        diagnose(art, names, json.load(open(sys.argv[sys.argv.index("--trajectory") + 1])), SimulationManager)
+        return names, np.zeros(len(names)), _np(art.get_dof_positions())
+    if "--trajectory" in sys.argv:
+        trajectory(art, names, json.load(open(sys.argv[sys.argv.index("--trajectory") + 1])), SimulationManager)
+        return names, np.zeros(len(names)), _np(art.get_dof_positions())
     q_target = np.array([[targets.get(n, 0.0) for n in names]], dtype=np.float32)
     art.set_dof_position_targets(q_target)
     if GUI:  # physics steps with the timeline until the window closes

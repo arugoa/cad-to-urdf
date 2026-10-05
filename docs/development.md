@@ -12,10 +12,12 @@ cad2urdf/
   writers.py       URDF, MJCF, SRDF, Isaac Lab / ManiSkill / Gazebo files
   usd_asset.py     the layered USDA asset
   asset_test.py    asset audit and stress tests
+  sim2sim.py       one scenario run in several simulators and compared
   scene.py         static scenes and drop test
   validate.py, isaac_probe.py   simulator checks (the probe runs in Isaac Sim's Python)
   util.py          memory cap and shared helpers
 .agents/skills/cad2sim/   agent skill: SKILL.md, part_classes.yaml
+.agents/skills/sim2sim/   agent skill: cross-simulator comparison
 examples/                 arm4 (parametric sample), sigmaban, step (Kaya base, a Haro380 spec)
 tests/                    pytest suite, view_urdf.py
 docs/                     these docs, RESEARCH.md, ONSHAPE_API_KEYS.md, demo GIFs

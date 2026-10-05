@@ -31,7 +31,7 @@ Each clip shows the visual meshes (left) and the generated collision shapes (rig
 - convex collision shapes per link: primitives where they fit, CoACD where they don't
 - static scenes from surface-only STEP files (competition fields)
 
-The output is deterministic. What geometry can't tell (joint limits, materials, which joints matter) goes in a small YAML spec, drafted for you, or is decided by the [`cad2sim` agent skill](#agent-skill).
+The output is deterministic. What geometry can't tell (joint limits, materials, which joints matter) goes in a small YAML spec, drafted for you, or is decided by the [`cad2sim` agent skill](#agent-skills).
 
 ## How it works
 
@@ -69,14 +69,17 @@ python -m cad2urdf.route --cad onshape --format native --sim mujoco --run \
 
 python -m cad2urdf.validate build/robot --sims mujoco,pybullet     # does each simulator load and hold it?
 python -m cad2urdf.asset_test build/robot --sims mujoco,newton     # stress tests and file cross-checks
+python -m cad2urdf.sim2sim build/robot --sims mujoco,newton       # same scenario in each simulator, compared
 python tests/view_urdf.py build/robot --sim mujoco                 # look at it
 ```
 
 Output goes to `build/robot/`: `<robot>.urdf`, `mjcf/`, `usd/`, `isaaclab/`, `maniskill/`, `gazebo/`, `meshes/` and reports ([full list](docs/spec.md#output-folder)). Other routes, exporters and the spec format are in [CAD sources](docs/cad.md) and [Spec and outputs](docs/spec.md).
 
-## Agent skill
+## Agent skills
 
 `.agents/skills/cad2sim/SKILL.md` (linked into `.claude/skills/`) lets Claude Code or Codex run the whole job: pick the route, run it, resolve the REVIEW items, decide which parts are fasteners or bearings and which joints to keep, then test the asset in simulation and fix the spec until the checks pass. It edits the spec, never the generated files.
+
+`.agents/skills/sim2sim/SKILL.md` runs the same scenario in several simulators and explains where they differ.
 
 ## License
 

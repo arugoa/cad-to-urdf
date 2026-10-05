@@ -8,13 +8,23 @@ python -m cad2urdf.asset_test build/robot --sims mujoco,newton    # add isaac to
 
 Checks mass, inertia and limits; compares the URDF, MJCF and each USD variant (armature, gains, limits, efforts, masses, joint axes); then drives the asset in MuJoCo with a hold, step responses, a bang-bang acceleration test (a missing armature makes it explode here) and a random sweep. `newton` adds what Newton's USD import reads. `isaac` reads back what Isaac Sim applied and compares it with the file. Flags are `error`, `warning` or `info`, each with a hint, and go to `asset_test.json`. The [`cad2sim` skill](../.agents/skills/cad2sim/SKILL.md) reads them and fixes the spec.
 
+## Sim2sim
+
+```bash
+python -m cad2urdf.sim2sim build/robot --sims mujoco,newton,isaac
+```
+
+Runs one scripted scenario (hold, step, bang-bang, return) in each simulator with the same 2 ms step and the same explicit torque PD, contacts off, joints matched by name. MuJoCo is the reference. The per-joint RMSE against it goes to `sim2sim.json` and the trajectories to `sim2sim_trajectories.npz`. The [`sim2sim` skill](../.agents/skills/sim2sim/SKILL.md) explains the gaps.
+
+On arm4, Newton is within about 4% of the joint range and PyBullet differs where it lacks armature. Isaac Sim differs by about 22% of the range. Its damping and lack of springs match MuJoCo, and neither joint friction nor the PhysX velocity cap explains it, so the cause is not found.
+
 ## Repository tests
 
 ```bash
 pytest -q
 ```
 
-Covers joint inference, inertia, collision fitting, the SRDF matrix, the STEP draft, the URDF round trip, `root_rpy`, loop closures, part classes, the Onshape front end against a fake API (planar, origin and screw mates), the USD asset (structure, joint frames, units, armature per engine, Newton's read-back), and the asset tester catching deliberately broken assets.
+Covers joint inference, inertia, collision fitting, the SRDF matrix, the STEP draft, the URDF round trip, `root_rpy`, loop closures, part classes, the Onshape front end against a fake API (planar, origin and screw mates), the USD asset (structure, joint frames, units, armature per engine, Newton's read-back), the asset tester catching deliberately broken assets, and the sim2sim comparison.
 
 ## Status
 
