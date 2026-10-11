@@ -17,7 +17,7 @@ jobs:
       - name: Test Robot Model CI itself
         run: python -m pytest tools/robot-model-ci/tests -q
       - name: Validate known-good model fixtures
-        run: robot-model-ci validate examples/robot-model-ci-fixtures/baseline --json build/fixture-validation.json
+        run: robot-model-ci validate tools/robot-model-ci/tests/fixtures/baseline --json build/fixture-validation.json
       - name: Validate generated CAD2Sim model if an earlier workflow step created one
         shell: bash
         run: |

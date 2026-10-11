@@ -5,7 +5,7 @@ import pytest
 from robot_model_ci.checks import validate_path
 from robot_model_ci.compare import compare_dirs
 
-FIXTURES = Path(__file__).resolve().parents[3] / "examples" / "robot-model-ci-fixtures"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"  # self-contained: the tool can live in its own repo
 
 
 def test_valid_fixture_passes():
@@ -38,7 +38,7 @@ def test_cross_format_mismatch_is_reported():
 
 # --- regressions found by running the checker on real cad2urdf output -----------------------------
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[3]  # the cad-to-urdf checkout; only meaningful inside it
 
 
 def _codes(report):
