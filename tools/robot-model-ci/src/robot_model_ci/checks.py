@@ -42,8 +42,29 @@ def _numbers(value: str | None, count: int, label: str) -> list[float] | None:
     return vals
 
 
-def _resolve_asset(ref: str, model_file: Path, root: Path) -> Path | None:
-    """Resolve local assets conservatively; return None for remote/unhandled URIs."""
+def _principal_moments(ixx: float, ixy: float, ixz: float, iyy: float, iyz: float, izz: float) -> list[float]:
+    """Eigenvalues of a symmetric 3x3 inertia tensor (closed form, so the package stays dependency-free)."""
+    p1 = ixy * ixy + ixz * ixz + iyz * iyz
+    q = (ixx + iyy + izz) / 3.0
+    if p1 == 0.0:
+        return sorted([ixx, iyy, izz])
+    p2 = (ixx - q) ** 2 + (iyy - q) ** 2 + (izz - q) ** 2 + 2.0 * p1
+    p = math.sqrt(p2 / 6.0)
+    b = [[(ixx - q) / p, ixy / p, ixz / p], [ixy / p, (iyy - q) / p, iyz / p], [ixz / p, iyz / p, (izz - q) / p]]
+    det_b = (b[0][0] * (b[1][1] * b[2][2] - b[1][2] * b[2][1]) - b[0][1] * (b[1][0] * b[2][2] - b[1][2] * b[2][0])
+             + b[0][2] * (b[1][0] * b[2][1] - b[1][1] * b[2][0]))
+    phi = math.acos(max(-1.0, min(1.0, det_b / 2.0))) / 3.0
+    e3 = q + 2.0 * p * math.cos(phi)
+    e1 = q + 2.0 * p * math.cos(phi + 2.0 * math.pi / 3.0)
+    return sorted([e1, 3.0 * q - e1 - e3, e3])
+
+
+def _resolve_asset(ref: str, model_file: Path, root: Path, base_dir: str | None = None) -> Path | None:
+    """Resolve local assets conservatively; return None for remote/unhandled URIs.
+
+    ``base_dir`` is an MJCF ``<compiler meshdir/texturedir/assetdir>`` value: MuJoCo looks for relative
+    asset files under it, relative to the model file's directory.
+    """
     raw = ref.strip()
     if not raw or raw.startswith(("http://", "https://")):
         return None
@@ -62,14 +83,16 @@ def _resolve_asset(ref: str, model_file: Path, root: Path) -> Path | None:
         if p.is_absolute():
             return p
         candidates = [model_file.parent / p, root / p, root.parent / p]
+        if base_dir:
+            candidates.insert(0, model_file.parent / base_dir / p)
     for candidate in candidates:
         if candidate.exists():
             return candidate.resolve()
     return candidates[0].resolve()
 
 
-def _check_asset(ref: str, path: Path, root: Path, issues: list[Issue], label: str) -> None:
-    resolved = _resolve_asset(ref, path, root)
+def _check_asset(ref: str, path: Path, root: Path, issues: list[Issue], label: str, base_dir: str | None = None) -> None:
+    resolved = _resolve_asset(ref, path, root, base_dir)
     if resolved is None:
         return
     # Absolute paths may be intentional on a developer's machine, but make portability visible.
@@ -143,6 +166,12 @@ def _check_urdf(path: Path, root: Path, issues: list[Issue]) -> dict[str, Any] |
                     if min(ixx, iyy, izz) < -1e-9 or (ixx * iyy - ixy * ixy) < -1e-9 or det < -1e-9:
                         _issue(issues, "ERROR", "urdf.inertia_not_psd", path, root,
                                f"Link '{name}' inertia tensor is not positive semidefinite")
+                    else:
+                        lo, mid, hi = _principal_moments(ixx, ixy, ixz, iyy, iyz, izz)
+                        if lo + mid < hi * (1 - 1e-6):
+                            _issue(issues, "ERROR", "urdf.inertia_triangle", path, root,
+                                   f"Link '{name}' principal moments {lo:.4g}, {mid:.4g}, {hi:.4g} violate the triangle "
+                                   "inequality (A + B >= C); no real body has this inertia and MuJoCo refuses to compile it")
                 inertial_data = {"mass": mass, **vals}
         else:
             inertial_data = None
@@ -203,7 +232,7 @@ def _check_urdf(path: Path, root: Path, issues: list[Issue]) -> dict[str, Any] |
                 _issue(issues, "ERROR", "urdf.axis_vector", path, root, str(exc))
         limit_el = joint.find("limit")
         limits: dict[str, float | None] = {}
-        if jtype in {"revolute", "prismatic", "continuous"} and limit_el is None:
+        if jtype in {"revolute", "prismatic"} and limit_el is None:
             _issue(issues, "ERROR", "urdf.limit_missing", path, root, f"Movable joint '{name}' has no <limit> element")
         if limit_el is not None:
             for key in ("lower", "upper", "effort", "velocity"):
@@ -264,6 +293,8 @@ def _check_mjcf(path: Path, root: Path, issues: list[Issue]) -> dict[str, Any] |
         _issue(issues, "ERROR", "mjcf.root", path, root, f"Expected <mujoco> root, found <{model.tag}>")
         return None
     inventory: dict[str, Any] = {"format": "mjcf", "name": model.get("model", path.stem), "bodies": {}, "joints": {}, "actuators": {}, "assets": {}}
+    compiler = model.find("compiler")
+    meshdir = (compiler.get("meshdir") or compiler.get("assetdir")) if compiler is not None else None
     for include in model.findall(".//include"):
         ref = include.get("file")
         if ref:
@@ -271,10 +302,12 @@ def _check_mjcf(path: Path, root: Path, issues: list[Issue]) -> dict[str, Any] |
     for mesh in model.findall(".//asset/mesh"):
         name, ref = mesh.get("name", ""), mesh.get("file", "")
         if not ref:
-            _issue(issues, "ERROR", "mjcf.mesh_file", path, root, f"MJCF mesh '{name}' has no file")
+            # a mesh can also be defined inline (vertex=...) or by a plugin
+            if mesh.get("vertex") is None and mesh.find("plugin") is None and mesh.get("class") is None:
+                _issue(issues, "ERROR", "mjcf.mesh_file", path, root, f"MJCF mesh '{name}' has no file")
             continue
-        _check_asset(ref, path, root, issues, f"MJCF mesh '{name}'")
-        resolved = _resolve_asset(ref, path, root)
+        _check_asset(ref, path, root, issues, f"MJCF mesh '{name}'", meshdir)
+        resolved = _resolve_asset(ref, path, root, meshdir)
         digest = None
         if resolved and resolved.exists() and resolved.is_file():
             try:
