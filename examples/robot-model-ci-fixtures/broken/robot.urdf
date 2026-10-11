@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<robot name="demo_arm">
+  <link name="base">
+    <inertial><mass value="2.0"/><inertia ixx="0.1" ixy="0" ixz="0" iyy="0.1" iyz="0" izz="0.1"/></inertial>
+    <visual><geometry><mesh filename="package://demo_arm/meshes/nope.stl"/></geometry></visual>
+  </link>
+  <link name="link1">
+    <inertial><mass value="1.0"/><inertia ixx="0.05" ixy="0" ixz="0" iyy="0.05" iyz="0" izz="0.05"/></inertial>
+  </link>
+  <joint name="shoulder" type="revolute">
+    <parent link="base"/><child link="link1"/><axis xyz="0 0 1"/>
+    <limit lower="2" upper="-2" effort="20" velocity="2"/>
+  </joint>
+</robot>

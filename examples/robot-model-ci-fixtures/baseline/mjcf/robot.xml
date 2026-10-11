@@ -1,0 +1,6 @@
+<mujoco model="demo_arm">
+  <compiler angle="radian"/>
+  <asset><mesh name="base_mesh" file="../meshes/base.stl"/></asset>
+  <worldbody><body name="base"><geom type="mesh" mesh="base_mesh"/><body name="link1"><joint name="shoulder" type="hinge" range="-1.57 1.57"/></body></body></worldbody>
+  <actuator><position name="shoulder_motor" joint="shoulder"/></actuator>
+</mujoco>

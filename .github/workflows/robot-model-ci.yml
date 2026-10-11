@@ -1,0 +1,35 @@
+name: Robot Model CI
+on:
+  push:
+  pull_request:
+jobs:
+  model-artifact-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install checker and test runner
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest -e tools/robot-model-ci
+      - name: Test Robot Model CI itself
+        run: python -m pytest tools/robot-model-ci/tests -q
+      - name: Validate known-good model fixtures
+        run: robot-model-ci validate examples/robot-model-ci-fixtures/baseline --json build/fixture-validation.json
+      - name: Validate generated CAD2Sim model if an earlier workflow step created one
+        shell: bash
+        run: |
+          if [ -d build/robot ]; then
+            robot-model-ci validate build/robot --json build/robot/model-ci-report.json
+          else
+            echo "::notice::No build/robot directory exists. Add your CAD2Sim generation command before this step for end-to-end artifact CI."
+          fi
+      - name: Upload validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-model-ci-reports
+          path: build/**/*.json
+          if-no-files-found: ignore
