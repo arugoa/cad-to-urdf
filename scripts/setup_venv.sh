@@ -17,4 +17,5 @@ if [[ "${1:-}" == "--isaac" ]]; then
 else
   uv pip install -p .venv -r requirements.txt
 fi
+uv pip install -p .venv -e tools/robot-model-ci
 env -u PYTHONPATH .venv/bin/python -m pytest -q tests

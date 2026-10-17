@@ -16,6 +16,7 @@ cad2urdf/
   scene.py         static scenes and drop test
   validate.py, isaac_probe.py   simulator checks (the probe runs in Isaac Sim's Python)
   util.py          memory cap and shared helpers
+tools/robot-model-ci/       structural checker for generated URDF/MJCF (own package and tests)
 .agents/skills/cad2sim/   agent skill: SKILL.md, part_classes.yaml
 .agents/skills/sim2sim/   agent skill: cross-simulator comparison
 examples/                 arm4 (parametric sample), sigmaban, step (Kaya base, a Haro380 spec)

@@ -2,12 +2,12 @@
 
 `robot-model-ci` is an artifact-level quality gate for CAD2Sim output folders. It deliberately complements the existing `cad2urdf.validate`, `asset_test`, and `sim2sim` commands rather than replacing them. It checks common structural and packaging defects in URDF/MJCF and compares generated output to a previously known-good artifact tree.
 
-## Install inside `cad-to-urdf`
+## Install
 
-From the repository root after copying this `tools/robot-model-ci/` folder into your repo:
+From the `cad-to-urdf` repository root:
 
 ```bash
-python -m pip install -e tools/robot-model-ci
+uv pip install -e tools/robot-model-ci
 robot-model-ci validate build/robot --json build/robot/model_ci_report.json
 ```
 
@@ -26,7 +26,7 @@ The comparison intentionally treats removed links/joints and changed joint topol
 - XML parsing, root element checks, duplicate link/joint/body names
 - URDF parent/child references, graph roots/connectivity, joint axes and finite origin values
 - movable-joint limits, ordered ranges, positive effort/velocity values
-- positive mass and positive-semidefinite URDF inertia tensor checks
+- positive mass (a zero-mass frame link is allowed behind a fixed joint) and positive-semidefinite URDF inertia tensor checks
 - local mesh/include references and warnings for machine-specific absolute paths
 - MJCF joint range and actuator inventory checks
 - cross-format movable-joint inventory/type warnings across URDF and MJCF with the same model name

@@ -8,7 +8,7 @@ Turns a CAD assembly (Onshape, SolidWorks, Fusion, Creo or STEP) into simulation
 | [Simulators](docs/simulators.md) | files per simulator, validation, viewing, per-simulator notes |
 | [USD asset](docs/usd.md) | layered structure, physics variants, units, Isaac Lab and Newton |
 | [Spec and outputs](docs/spec.md) | the YAML spec, part classes, collision, the output folder |
-| [Testing and status](docs/testing.md) | asset tests, repo tests, robots checked, limitations |
+| [Testing and status](docs/testing.md) | model CI, asset tests, sim2sim, repo tests, robots checked, limitations |
 | [Development](docs/development.md) | code layout, memory cap, determinism |
 | [Research notes](docs/RESEARCH.md) | existing tools, and how each simulator reads URDF, SRDF and dynamics |
 | [Onshape API keys](docs/ONSHAPE_API_KEYS.md) | getting keys for the Onshape API route |
@@ -67,6 +67,7 @@ python -m cad2urdf.route --cad onshape --format native --sim mujoco --run \
     --input "https://cad.onshape.com/documents/<doc>/w/<workspace>/e/<assembly>" --out build/robot \
     --part-classes .agents/skills/cad2sim/part_classes.yaml
 
+robot-model-ci validate build/robot                                 # fast structural check, no simulator
 python -m cad2urdf.validate build/robot --sims mujoco,pybullet     # does each simulator load and hold it?
 python -m cad2urdf.asset_test build/robot --sims mujoco,newton     # stress tests and file cross-checks
 python -m cad2urdf.sim2sim build/robot --sims mujoco,newton       # same scenario in each simulator, compared

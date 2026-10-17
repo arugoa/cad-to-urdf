@@ -108,3 +108,18 @@ def test_committed_arm4_output_validates():
     report = validate_path(REPO / "examples" / "arm4" / "output")
     assert report["status"] == "passed", [i for i in report["issues"] if i["severity"] == "ERROR"][:3]
     assert report["summary"]["models"] >= 3  # URDF, Gazebo URDF, MJCF
+
+
+def test_massless_frame_is_fine_behind_a_fixed_joint_but_not_a_movable_one(tmp_path):
+    def build(jtype):
+        d = tmp_path / jtype
+        d.mkdir()
+        (d / "robot.urdf").write_text(f"""<robot name="r">
+  <link name="base"><inertial><mass value="1"/><inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/></inertial></link>
+  <link name="frame"><inertial><mass value="0"/><inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/></inertial></link>
+  <joint name="j" type="{jtype}"><parent link="base"/><child link="frame"/><axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" effort="1" velocity="1"/></joint>
+</robot>""")
+        return validate_path(str(d))
+    assert build("fixed")["status"] == "passed"
+    assert build("revolute")["status"] == "failed"

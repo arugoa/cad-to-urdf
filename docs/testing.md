@@ -8,6 +8,15 @@ python -m cad2urdf.asset_test build/robot --sims mujoco,newton    # add isaac to
 
 Checks mass, inertia and limits; compares the URDF, MJCF and each USD variant (armature, gains, limits, efforts, masses, joint axes); then drives the asset in MuJoCo with a hold, step responses, a bang-bang acceleration test (a missing armature makes it explode here) and a random sweep. `newton` adds what Newton's USD import reads. `isaac` reads back what Isaac Sim applied and compares it with the file. Flags are `error`, `warning` or `info`, each with a hint, and go to `asset_test.json`. The [`cad2sim` skill](../.agents/skills/cad2sim/SKILL.md) reads them and fixes the spec.
 
+## Model CI
+
+```bash
+robot-model-ci validate build/robot                      # structure: links, joints, axes, limits, inertia, meshes, URDF vs MJCF
+robot-model-ci compare known-good/ build/robot           # fails if a joint or link vanished or a joint type changed
+```
+
+`tools/robot-model-ci` reads the URDF and MJCF as text and never starts a simulator, so it is the fast check to run before `asset_test` and `sim2sim`. It exits non-zero on errors. `compare` warns on changed limits, mass or mesh bytes. Install with `uv pip install -e tools/robot-model-ci`; a GitHub Actions workflow runs its tests and a known-good fixture on every push.
+
 ## Sim2sim
 
 ```bash

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -136,6 +135,7 @@ def _check_urdf(path: Path, root: Path, issues: list[Issue]) -> dict[str, Any] |
     joint_summary: dict[str, Any] = {}
     link_summary: dict[str, Any] = {}
     mesh_hashes: dict[str, str] = {}
+    massless_frames: set[str] = set()
     for link in robot.findall("link"):
         name = link.get("name", "")
         inertial = link.find("inertial")
@@ -146,7 +146,11 @@ def _check_urdf(path: Path, root: Path, issues: list[Issue]) -> dict[str, Any] |
                 mass = float(mass_el.get("value", "nan")) if mass_el is not None else float("nan")
             except ValueError:
                 mass = float("nan")
-            if not math.isfinite(mass) or mass <= 0:
+            zero_inertia = inertia_el is not None and all(
+                inertia_el.get(k, "nan") in ("0", "0.0") for k in ("ixx", "ixy", "ixz", "iyy", "iyz", "izz"))
+            if mass == 0 and zero_inertia and link.find("visual") is None and link.find("collision") is None:
+                massless_frames.add(name)  # a pure frame (e.g. a planar-mate stage); fine while a fixed joint carries it
+            elif not math.isfinite(mass) or mass <= 0:
                 _issue(issues, "ERROR", "urdf.mass", path, root, f"Link '{name}' has non-positive or invalid mass")
             if inertia_el is None:
                 _issue(issues, "ERROR", "urdf.inertia_missing", path, root, f"Link '{name}' has <inertial> but no <inertia>")
@@ -257,6 +261,9 @@ def _check_urdf(path: Path, root: Path, issues: list[Issue]) -> dict[str, Any] |
                 elif math.isfinite(lo) and math.isfinite(hi) and lo >= hi:
                     _issue(issues, "ERROR", "urdf.limit_order", path, root, f"Joint '{name}' lower limit must be < upper")
         joint_summary[name] = {"type": jtype, "parent": parent, "child": child, "axis": axis, "limits": limits}
+        if child in massless_frames and jtype != "fixed":
+            _issue(issues, "ERROR", "urdf.mass", path, root,
+                   f"Link '{child}' has zero mass but is moved by {jtype} joint '{name}'")
 
     if links:
         roots = link_set - set(child_parent)
