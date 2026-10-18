@@ -74,3 +74,14 @@ def test_a_missing_usd_is_a_warning_not_a_crash(copy):
     shutil.rmtree(folder / "usd")
     result = _run(folder)
     assert any(f["where"] == "usd" and f["severity"] == "warning" for f in result["flags"])
+
+
+def test_massless_frame_links_are_not_errors_but_massless_geometry_is():
+    frame = {"mass": 0.0, "frame": True, "inertia": None}
+    body = {"mass": 0.0, "frame": False, "inertia": None}
+    flags: list = []
+    asset_test.audit({"links": {"stage": frame}, "joints": {}}, flags)
+    assert not flags
+    asset_test.audit({"links": {"link": body}, "joints": {}}, flags)
+    assert any(f["severity"] == "error" for f in flags)
+    assert asset_test._expected_mass(frame) == asset_test.MIN_MASS

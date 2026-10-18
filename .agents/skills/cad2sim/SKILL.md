@@ -133,6 +133,14 @@ Mates and shaft fits also produce joints that are not mechanisms: bearings, shaf
 
 ## 7. Read validation.json and iterate
 
+First run the fast structural check. It reads the URDF and MJCF as text, starts no simulator, and exits non-zero on errors:
+
+```bash
+robot-model-ci validate build/<robot>
+```
+
+An error here is a broken asset (missing or duplicate link or joint, bad axis or limit, invalid inertia, a missing mesh, URDF and MJCF disagreeing on joints): fix the spec, or report a code bug if the spec can't cause it. A model that simulates fine but fails here means the checker is wrong: report it. Then read `validation.json`:
+
 | Symptom | Likely cause | Fix in the spec |
 |---|---|---|
 | `penetrating_pairs_at_zero` not empty | collision shapes too fat at a joint | switch that link to `decompose` or `primitives` in `collision:` |
@@ -183,7 +191,9 @@ Each flag is an `error` (fix it), a `warning` (judge it) or an `info` (know it).
 
 Newton ignores `physxJoint:maxJointVelocity` for solver enforcement: bound speed with damping, not with that attribute. Engines can be checked at once by separate subagents (one for `mujoco`, one for `newton`); Isaac runs alone. For the same scenario across simulators, use the sim2sim skill.
 
-After each change re-read the flags and keep a short list of what changed and why. Stop when there are no errors; explain each warning that remains. Report the flag counts, each error with its cause and the spec change you made, and anything unverified (no Isaac run, no Newton install).
+When you re-convert a robot that already worked (a changed spec, a changed CAD, a code update), keep the earlier output and compare: `robot-model-ci compare build/<robot>_old build/<robot>`. A removed or retyped joint or link fails; changed limits, mass or meshes are warnings to judge against what you changed on purpose.
+
+After each change re-read the flags and keep a short list of what changed and why. Stop when there are no errors; explain each warning that remains. Report the `robot-model-ci` result, the flag counts, each error with its cause and the spec change you made, and anything unverified (no Isaac run, no Newton install).
 
 ## 9. Determinism
 

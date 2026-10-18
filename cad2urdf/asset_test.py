@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 
 DEG = 180.0 / np.pi
+MIN_MASS = 1e-4  # kg: what the writers give a massless frame link (writers.MIN_MASS)
 DT = 0.002  # the MJCF timestep: the armature floor 16*kp*dt^2 is stated against it
 BLOWUP_SPEED = 500.0  # rad/s or m/s: past this the asset has exploded
 
@@ -44,6 +45,7 @@ def read_urdf(path: Path) -> dict:
         inertia = l.find("inertial/inertia")
         links[l.get("name")] = {
             "mass": float(mass.get("value")) if mass is not None else 0.0,
+            "frame": l.find("visual") is None and l.find("collision") is None,  # a pure frame (planar-mate stage)
             "inertia": None if inertia is None else np.array(
                 [[float(inertia.get(k)) for k in ("ixx", "ixy", "ixz")], [float(inertia.get(k)) for k in ("ixy", "iyy", "iyz")],
                  [float(inertia.get(k)) for k in ("ixz", "iyz", "izz")]]),
@@ -137,6 +139,8 @@ def read_usd(path: Path, variant: str) -> dict:
 def audit(urdf: dict, flags: list) -> dict:
     masses = []
     for name, l in urdf["links"].items():
+        if l["mass"] == 0 and l["frame"]:
+            continue  # a massless frame behind a fixed joint: the MJCF and USD give it MIN_MASS
         if l["mass"] <= 0:
             _flag(flags, "error", f"urdf link {name}", "non-positive mass", "a link needs mass: check the part materials")
             continue
@@ -209,13 +213,17 @@ def consistency(urdf: dict, mjcf: dict | None, usd: dict[str, dict], flags: list
                                                             f"{16 * m['kp'] * DT**2:.6g}", floor_note)
     if mjcf:
         for body, mass in mjcf["mass"].items():
-            if body in urdf["links"] and not _close(mass, urdf["links"][body]["mass"], 1e-3, 1e-7):
+            if body in urdf["links"] and not _close(mass, _expected_mass(urdf["links"][body]), 1e-3, 1e-7):
                 _flag(flags, "error", f"mjcf body {body}", f"mass {mass:.6g} vs URDF {urdf['links'][body]['mass']:.6g}")
         for variant, usd_d in usd.items():
             for body, mass in usd_d["mass"].items():
-                if body in urdf["links"] and not _close(mass, urdf["links"][body]["mass"], 1e-3, 1e-7):
+                if body in urdf["links"] and not _close(mass, _expected_mass(urdf["links"][body]), 1e-3, 1e-7):
                     _flag(flags, "error", f"usd[{variant}] body {body}", f"mass {mass:.6g} vs URDF {urdf['links'][body]['mass']:.6g}")
         _axes(mjcf, usd, urdf, flags)
+
+
+def _expected_mass(link: dict) -> float:
+    return max(link["mass"], MIN_MASS) if link["frame"] else link["mass"]
 
 
 def _axes(mjcf: dict, usd: dict, urdf: dict, flags: list) -> None:
